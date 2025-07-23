@@ -77,6 +77,8 @@ The build process **does not**:
 - Contact the Trigger.dev API
 - Require authentication (though API key can be embedded in image)
 - Create a deployment record
+- Run the indexing process (creates placeholder index.json)
+- Discover tasks/queues (this happens on first container startup)
 
 ### Phase 2 Details
 

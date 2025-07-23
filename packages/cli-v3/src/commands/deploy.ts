@@ -362,6 +362,7 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
       rewritePaths: true,
       envVars: serverEnvVars.success ? serverEnvVars.data.variables : {},
       forcedExternals,
+      skipIndexing: options.buildOnly, // Skip indexing in build-only mode
       listener: {
         onBundleStart() {
           $buildSpinner.start("Building trigger code");

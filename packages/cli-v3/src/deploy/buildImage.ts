@@ -540,6 +540,7 @@ export type GenerateContainerfileOptions = {
   image: BuildManifest["image"];
   indexScript: string;
   entrypoint: string;
+  skipIndexing?: boolean;
 };
 
 const BASE_IMAGE: Record<BuildRuntime, string> = {
@@ -592,6 +593,7 @@ const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
 async function generateBunContainerfile(options: GenerateContainerfileOptions) {
   const { baseImage, buildArgs, buildEnvVars, postInstallCommands, baseInstructions, packages } =
     parseGenerateOptions(options);
+  const skipIndexing = options.skipIndexing ?? false;
 
   return `# syntax=docker/dockerfile:1
 FROM ${baseImage} AS base
@@ -658,8 +660,12 @@ ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 ENV BUILDPLATFORM=$BUILDPLATFORM TARGETPLATFORM=$TARGETPLATFORM
 
-# Run the indexer
-RUN bun run ${options.indexScript}
+# Run the indexer (skip if building offline)
+RUN if [ "${skipIndexing}" != "true" ]; then \
+      bun run ${options.indexScript}; \
+    else \
+      echo '{"configPath":"./trigger.config.js","tasks":[],"queues":[],"workerEntryPoint":"./worker.js","runtime":"bun","runtimeVersion":"1.0.0"}' > index.json; \
+    fi
 
 # Development or production stage builds upon the base stage
 FROM base AS final
@@ -697,6 +703,7 @@ CMD []
 async function generateNodeContainerfile(options: GenerateContainerfileOptions) {
   const { baseImage, buildArgs, buildEnvVars, postInstallCommands, baseInstructions, packages } =
     parseGenerateOptions(options);
+  const skipIndexing = options.skipIndexing ?? false;
 
   return `# syntax=docker/dockerfile:1
 FROM ${baseImage} AS base
@@ -771,8 +778,12 @@ ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 ENV BUILDPLATFORM=$BUILDPLATFORM TARGETPLATFORM=$TARGETPLATFORM
 
-# Run the indexer
-RUN node ${options.indexScript}
+# Run the indexer (skip if building offline)
+RUN if [ "${skipIndexing}" != "true" ]; then \
+      node ${options.indexScript}; \
+    else \
+      echo '{"configPath":"./trigger.config.js","tasks":[],"queues":[],"workerEntryPoint":"./worker.js","runtime":"node","runtimeVersion":"21.0.0"}' > index.json; \
+    fi
 
 # Development or production stage builds upon the base stage
 FROM base AS final

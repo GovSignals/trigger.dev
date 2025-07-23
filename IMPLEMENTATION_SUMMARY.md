@@ -96,10 +96,32 @@ The implementation maintains full backward compatibility:
 5. Test promotion workflows
 6. Verify backward compatibility
 
+## Updates After Feedback
+
+Based on feedback about the indexing process requiring API communication, I've implemented additional changes:
+
+### Files Modified (Additional)
+
+1. **`/workspace/packages/cli-v3/src/deploy/buildImage.ts`**
+   - Added `skipIndexing` parameter to `GenerateContainerfileOptions`
+   - Modified Dockerfile templates to conditionally skip indexing
+   - Creates placeholder `index.json` when indexing is skipped
+
+2. **`/workspace/packages/cli-v3/src/build/buildWorker.ts`**
+   - Added `skipIndexing` to `BuildWorkerOptions`
+   - Passes the flag through to `writeContainerfile`
+
+### Key Changes
+
+- In build-only mode, the Docker build process now skips the indexing stage entirely
+- A placeholder `index.json` is created with minimal valid structure
+- No API calls are made during the build process
+- The worker will re-index on first startup when it has API access
+
 ## Next Steps
 
 1. Run integration tests with actual Docker builds
 2. Test with various registry configurations
 3. Validate with Trigger.dev server API
-4. Consider adding progress indicators for long operations
+4. Verify worker re-indexing on startup
 5. Add unit tests for new functions

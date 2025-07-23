@@ -34,6 +34,7 @@ export type BuildWorkerOptions = {
   envVars?: Record<string, string>;
   rewritePaths?: boolean;
   forcedExternals?: string[];
+  skipIndexing?: boolean;
 };
 
 export async function buildWorker(options: BuildWorkerOptions) {
@@ -93,6 +94,7 @@ export async function buildWorker(options: BuildWorkerOptions) {
       resolvedConfig,
       outputPath: options.destination,
       bundleResult,
+      skipIndexing: options.skipIndexing,
     });
   }
 
@@ -152,11 +154,13 @@ async function writeDeployFiles({
   resolvedConfig,
   outputPath,
   bundleResult,
+  skipIndexing,
 }: {
   buildManifest: BuildManifest;
   resolvedConfig: ResolvedConfig;
   outputPath: string;
   bundleResult: BundleResult;
+  skipIndexing?: boolean;
 }) {
   // Step 1. Read the package.json file
   const packageJson = await readProjectPackageJson(resolvedConfig.packageJsonPath);
@@ -190,7 +194,7 @@ async function writeDeployFiles({
 
   await writeJSONFile(join(outputPath, "build.json"), buildManifestToJSON(buildManifest));
   await writeJSONFile(join(outputPath, "metafile.json"), bundleResult.metafile);
-  await writeContainerfile(outputPath, buildManifest);
+  await writeContainerfile(outputPath, buildManifest, skipIndexing);
 }
 
 async function readProjectPackageJson(packageJsonPath: string) {
@@ -199,7 +203,7 @@ async function readProjectPackageJson(packageJsonPath: string) {
   return packageJson;
 }
 
-async function writeContainerfile(outputPath: string, buildManifest: BuildManifest) {
+async function writeContainerfile(outputPath: string, buildManifest: BuildManifest, skipIndexing?: boolean) {
   if (!buildManifest.runControllerEntryPoint || !buildManifest.indexControllerEntryPoint) {
     throw new Error("Something went wrong with the build. Aborting deployment. [code 7789]");
   }
@@ -210,6 +214,7 @@ async function writeContainerfile(outputPath: string, buildManifest: BuildManife
     build: buildManifest.build,
     image: buildManifest.image,
     indexScript: buildManifest.indexControllerEntryPoint,
+    skipIndexing,
   });
 
   const containerfilePath = join(outputPath, "Containerfile");

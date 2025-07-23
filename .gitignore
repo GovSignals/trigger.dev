@@ -48,6 +48,9 @@ apps/**/public/build
 .buildt
 
 **/tmp/
+
+# Trigger.dev deployment manifests
+.triggerdeploy.*.json
 /test-results/
 /playwright-report/
 /playwright/.cache/

@@ -2,7 +2,7 @@ import { intro, log, outro } from "@clack/prompts";
 import { getBranch, prepareDeploymentError, tryCatch } from "@trigger.dev/core/v3";
 import { InitializeDeploymentResponseBody } from "@trigger.dev/core/v3/schemas";
 import { Command, Option as CommandOption } from "commander";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 import { isCI } from "std-env";
 import { x } from "tinyexec";
 import { z } from "zod";
@@ -39,6 +39,9 @@ import { spinner } from "../utilities/windows.js";
 import { login } from "./login.js";
 import { archivePreviewBranch } from "./preview.js";
 import { updateTriggerPackages } from "./update.js";
+import { writeJSONFile, readJSONFile, pathExists } from "../utilities/fileSystem.js";
+import { indexWorkerManifest } from "../indexing/indexWorkerManifest.js";
+import { execOptionsForRuntime, alwaysExternal } from "@trigger.dev/core/v3/build";
 
 const DeployCommandOptions = CommonCommandOptions.extend({
   dryRun: z.boolean().default(false),
@@ -57,6 +60,8 @@ const DeployCommandOptions = CommonCommandOptions.extend({
   network: z.enum(["default", "none", "host"]).optional(),
   push: z.boolean().optional(),
   builder: z.string().default("trigger"),
+  buildOnly: z.boolean().default(false),
+  registerOnly: z.boolean().default(false),
 });
 
 type DeployCommandOptions = z.infer<typeof DeployCommandOptions>;
@@ -101,6 +106,8 @@ export function configureDeployCommand(program: Command) {
           "--skip-promotion",
           "Skip promoting the deployment to the current deployment for the environment."
         )
+        .option("--build-only", "Build and push the worker image without registering it")
+        .option("--register-only", "Register a previously built image without building")
     )
       .addOption(
         new CommandOption(
@@ -158,14 +165,28 @@ export async function deployCommand(dir: string, options: unknown) {
 async function _deployCommand(dir: string, options: DeployCommandOptions) {
   intro(`Deploying project${options.skipPromotion ? " (without promotion)" : ""}`);
 
-  if (!options.skipUpdateCheck) {
-    await updateTriggerPackages(dir, { ...options }, true, true);
+  if (options.buildOnly && options.registerOnly) {
+    throw new Error("--build-only and --register-only cannot be used together");
   }
 
   const cwd = process.cwd();
   const projectPath = resolve(cwd, dir);
 
   verifyDirectory(dir, projectPath);
+
+  if (options.buildOnly) {
+    await buildOnlyDeploy(projectPath, dir, options);
+    return;
+  }
+
+  if (options.registerOnly) {
+    await registerOnlyDeploy(projectPath, dir, options);
+    return;
+  }
+
+  if (!options.skipUpdateCheck) {
+    await updateTriggerPackages(dir, { ...options }, true, true);
+  }
 
   const authorization = await login({
     embedded: true,
@@ -733,6 +754,208 @@ async function failDeploy(
       }
     }
   }
+}
+
+async function buildOnlyDeploy(projectPath: string, dir: string, options: DeployCommandOptions) {
+  if (!options.skipUpdateCheck) {
+    await updateTriggerPackages(dir, { ...options }, true, true);
+  }
+
+  if (options.env === "production") {
+    options.env = "prod";
+  }
+
+  const envVars = resolveLocalEnvVars(options.envFile);
+
+  const resolvedConfig = await loadConfig({
+    cwd: projectPath,
+    overrides: { project: options.projectRef ?? envVars.TRIGGER_PROJECT_REF },
+    configFile: options.config,
+  });
+
+  const gitMeta = await createGitMeta(resolvedConfig.workspaceDir);
+  const branch =
+    options.env === "preview" ? getBranch({ specified: options.branch, gitMeta }) : undefined;
+
+  const destination = getTmpDir(resolvedConfig.workingDir, "build", options.dryRun);
+
+  const $buildSpinner = spinner();
+
+  const buildManifest = await buildWorker({
+    target: "unmanaged",
+    environment: options.env,
+    branch,
+    destination: destination.path,
+    resolvedConfig,
+    rewritePaths: true,
+    envVars: {},
+    forcedExternals: alwaysExternal,
+    listener: {
+      onBundleStart() {
+        $buildSpinner.start("Building project");
+      },
+      onBundleComplete() {
+        $buildSpinner.stop("Successfully built project");
+      },
+    },
+  });
+
+  const workerManifest = await indexWorkerManifest({
+    runtime: buildManifest.runtime,
+    indexWorkerPath: buildManifest.indexWorkerEntryPoint,
+    buildManifestPath: join(destination.path, "build.json"),
+    nodeOptions: execOptionsForRuntime(buildManifest.runtime, buildManifest),
+    env: {},
+    cwd: destination.path,
+    otelHookInclude: buildManifest.otelImportHook?.include,
+    otelHookExclude: buildManifest.otelImportHook?.exclude,
+  });
+
+  const imageTag = `${resolvedConfig.project}:${buildManifest.contentHash.substring(0, 8)}`;
+
+  const $imageSpinner = spinner();
+  $imageSpinner.start("Building image");
+
+  const buildResult = await buildImage({
+    isLocalBuild: true,
+    imagePlatform: "linux/amd64",
+    noCache: options.noCache,
+    push: options.push,
+    deploymentId: "offline",
+    deploymentVersion: "offline",
+    imageTag,
+    load: options.load,
+    contentHash: buildManifest.contentHash,
+    compilationPath: destination.path,
+    projectId: resolvedConfig.project,
+    projectRef: resolvedConfig.project,
+    apiUrl: options.apiUrl ?? "",
+    apiKey: "",
+    branchName: branch,
+    authAccessToken: "",
+    buildEnvVars: buildManifest.build.env,
+    network: options.network,
+    builder: options.builder,
+  });
+
+  if (!buildResult.ok) {
+    $imageSpinner.stop("Failed to build image");
+    throw new Error(buildResult.error);
+  }
+
+  $imageSpinner.stop("Successfully built image");
+
+  await writeJSONFile(
+    join(projectPath, ".triggerdeploy.json"),
+    {
+      environment: options.env,
+      contentHash: buildManifest.contentHash,
+      imageTag,
+      imageDigest: buildResult.digest,
+      runtime: buildManifest.runtime,
+    },
+    true
+  );
+
+  const taskCount = workerManifest.tasks.length;
+  log.message(`Detected ${taskCount} task${taskCount === 1 ? "" : "s"}`);
+  if (taskCount > 0) {
+    logger.table(
+      workerManifest.tasks.map((t) => ({ id: t.id, export: t.exportName ?? "", path: t.filePath }))
+    );
+  }
+
+  outro(
+    `Image ${imageTag} built${buildResult.digest ? " and pushed" : ""}. Run \`trigger.dev deploy --register-only\` to register it.`
+  );
+}
+
+async function registerOnlyDeploy(projectPath: string, dir: string, options: DeployCommandOptions) {
+  if (!options.skipUpdateCheck) {
+    await updateTriggerPackages(dir, { ...options }, true, true);
+  }
+
+  const authorization = await login({
+    embedded: true,
+    defaultApiUrl: options.apiUrl,
+    profile: options.profile,
+  });
+
+  if (!authorization.ok) {
+    throw new Error(
+      `You must login first. Use the \`login\` CLI command.\n\n${authorization.error}`
+    );
+  }
+
+  if (options.env === "production") {
+    options.env = "prod";
+  }
+
+  const envVars = resolveLocalEnvVars(options.envFile);
+
+  const resolvedConfig = await loadConfig({
+    cwd: projectPath,
+    overrides: { project: options.projectRef ?? envVars.TRIGGER_PROJECT_REF },
+    configFile: options.config,
+  });
+
+  const gitMeta = await createGitMeta(resolvedConfig.workspaceDir);
+  const branch =
+    options.env === "preview" ? getBranch({ specified: options.branch, gitMeta }) : undefined;
+
+  const projectClient = await getProjectClient({
+    accessToken: authorization.auth.accessToken,
+    apiUrl: authorization.auth.apiUrl,
+    projectRef: resolvedConfig.project,
+    env: options.env,
+    branch,
+    profile: options.profile,
+  });
+
+  if (!projectClient) {
+    throw new Error("Failed to get project client");
+  }
+
+  const manifestPath = join(projectPath, ".triggerdeploy.json");
+  if (!(await pathExists(manifestPath))) {
+    throw new Error("No build information found. Run deploy --build-only first.");
+  }
+
+  const manifest = await readJSONFile(manifestPath);
+
+  const init = await projectClient.client.initializeDeployment({
+    contentHash: manifest.contentHash,
+    userId: authorization.userId,
+    gitMeta,
+    type: "UNMANAGED",
+    runtime: manifest.runtime,
+  });
+
+  if (!init.success) {
+    throw new Error(`Failed to register deployment: ${init.error}`);
+  }
+
+  const deployment = init.data;
+
+  const $spinner = spinner();
+  $spinner.start(`Registering version ${deployment.version}`);
+
+  const finalize = await projectClient.client.finalizeDeployment(
+    deployment.id,
+    { imageDigest: manifest.imageDigest, skipPromotion: options.skipPromotion },
+    (m) => $spinner.message(m)
+  );
+
+  if (!finalize.success) {
+    $spinner.stop("Failed to finalize deployment");
+    throw new Error(finalize.error);
+  }
+
+  $spinner.stop(`Successfully deployed version ${deployment.version}`);
+
+  outro(
+    `Version ${deployment.version} registered${options.skipPromotion ? " without promotion" : ""}`
+  );
 }
 
 export function verifyDirectory(dir: string, projectPath: string) {

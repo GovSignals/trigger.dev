@@ -40,8 +40,7 @@ import { login } from "./login.js";
 import { archivePreviewBranch } from "./preview.js";
 import { updateTriggerPackages } from "./update.js";
 import { writeJSONFile, readJSONFile, pathExists } from "../utilities/fileSystem.js";
-import { indexWorkerManifest } from "../indexing/indexWorkerManifest.js";
-import { execOptionsForRuntime, alwaysExternal } from "@trigger.dev/core/v3/build";
+import { alwaysExternal } from "@trigger.dev/core/v3/build";
 
 const DeployCommandOptions = CommonCommandOptions.extend({
   dryRun: z.boolean().default(false),
@@ -800,17 +799,6 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
     },
   });
 
-  const workerManifest = await indexWorkerManifest({
-    runtime: buildManifest.runtime,
-    indexWorkerPath: buildManifest.indexWorkerEntryPoint,
-    buildManifestPath: join(destination.path, "build.json"),
-    nodeOptions: execOptionsForRuntime(buildManifest.runtime, buildManifest),
-    env: {},
-    cwd: destination.path,
-    otelHookInclude: buildManifest.otelImportHook?.include,
-    otelHookExclude: buildManifest.otelImportHook?.exclude,
-  });
-
   const imageTag = `${resolvedConfig.project}:${buildManifest.contentHash.substring(0, 8)}`;
 
   const $imageSpinner = spinner();
@@ -857,13 +845,7 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
     true
   );
 
-  const taskCount = workerManifest.tasks.length;
-  log.message(`Detected ${taskCount} task${taskCount === 1 ? "" : "s"}`);
-  if (taskCount > 0) {
-    logger.table(
-      workerManifest.tasks.map((t) => ({ id: t.id, export: t.exportName ?? "", path: t.filePath }))
-    );
-  }
+  log.message("Image built and ready for registration");
 
   outro(
     `Image ${imageTag} built${buildResult.digest ? " and pushed" : ""}. Run \`trigger.dev deploy --register-only\` to register it.`

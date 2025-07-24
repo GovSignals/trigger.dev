@@ -84,6 +84,6 @@ export default defineConfig({
       puppeteer(),
       playwright(),
     ],
-    external: ["re2"],
+    external: ["re2", "sqlite3", "bcrypt", "canvas", "sharp", "fluent-ffmpeg", "mupdf", "zip-node-addon"],
   },
 });

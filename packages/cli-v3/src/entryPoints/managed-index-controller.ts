@@ -103,6 +103,8 @@ async function indexDeployment({
       targetPlatform,
     };
 
+    console.log("Writing index-metadata.json");
+
     await writeFile(join(process.cwd(), "index-metadata.json"), JSON.stringify(indexMetadata, null, 2));
 
     console.log(

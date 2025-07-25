@@ -3,6 +3,7 @@ import { getBranch, prepareDeploymentError, tryCatch } from "@trigger.dev/core/v
 import { InitializeDeploymentResponseBody, CreateBackgroundWorkerRequestBody } from "@trigger.dev/core/v3/schemas";
 import { Command, Option as CommandOption } from "commander";
 import { resolve, join } from "node:path";
+// import { readdir } from "node:fs/promises";
 import { isCI } from "std-env";
 import { x } from "tinyexec";
 import { z } from "zod";
@@ -503,6 +504,14 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
     const dockerExportPath = join(destination.path, "docker-export", "app");
     const indexMetadataPath = join(dockerExportPath, "index-metadata.json");
     const indexErrorPath = join(dockerExportPath, "index-error.json");
+
+    // List the contents of the docker export path for debugging
+    // try {
+    //   const dockerExportContents = await readdir(dockerExportPath);
+    //   logger.debug("Docker export path contents", { dockerExportPath, contents: dockerExportContents });
+    // } catch (error) {
+    //   logger.debug("Failed to list docker export path contents", { dockerExportPath, error: error instanceof Error ? error.message : String(error) });
+    // }
     
     logger.debug("Checking for index files", { dockerExportPath, indexMetadataPath, indexErrorPath });
 

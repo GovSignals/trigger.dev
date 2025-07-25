@@ -512,25 +512,25 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
   }
 
   // Copy the docker-export folder to the test directory
-  const testDir = "/Users/conneraldrich/Development/Projects/govsignals/trigger.dev/references/v3-catalog/test";
-  const dockerExportPath = join(options.cwd, "docker-export", "app");
+  // const testDir = "/Users/conneraldrich/Development/Projects/govsignals/trigger.dev/references/v3-catalog/test";
+  // const dockerExportPath = join(options.cwd, "docker-export");
   
-  try {
-    // Ensure the test directory exists
-    mkdirSync(testDir, { recursive: true });
+  // try {
+  //   // Ensure the test directory exists
+  //   mkdirSync(testDir, { recursive: true });
 
-    // Copy the docker-export folder to the test directory
-    cpSync(dockerExportPath, testDir, { recursive: true });
+  //   // Copy the docker-export folder to the test directory
+  //   cpSync(dockerExportPath, testDir, { recursive: true });
     
-    logger.info(`Copied docker-export from ${dockerExportPath} to ${testDir}`);
-    options.onLog?.(`Copied docker-export to ${testDir}`);
-  } catch (e) {
-    logger.error("Failed to copy docker-export to test directory", {
-      error: e instanceof Error ? e.message : JSON.stringify(e),
-      source: dockerExportPath,
-      destination: testDir,
-      });
-    }
+  //   logger.info(`Copied docker-export from ${dockerExportPath} to ${testDir}`);
+  //   options.onLog?.(`Copied docker-export to ${testDir}`);
+  // } catch (e) {
+  //   logger.error("Failed to copy docker-export to test directory", {
+  //     error: e instanceof Error ? e.message : JSON.stringify(e),
+  //     source: dockerExportPath,
+  //     destination: testDir,
+  //     });
+  //   }
 
   // Get the image size
   const sizeProcess = x("docker", ["image", "inspect", options.imageTag, "--format={{.Size}}"], {
@@ -836,8 +836,10 @@ ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
 # Copy the files from the install stage
 COPY --from=build --chown=node:node /app ./
 
-# Copy the index.json file from the indexer stage
-COPY --from=indexer --chown=node:node /app/index.json ./
+# Copy the index.json file from the indexer stage if it exists
+COPY --from=indexer --chown=node:node /app/index.json* ./
+COPY --from=indexer --chown=node:node /app/index-metadata.json* ./
+COPY --from=indexer --chown=node:node /app/index-error.json* ./
 
 ENTRYPOINT [ "dumb-init", "node", "${options.entrypoint}" ]
 CMD []

@@ -1,9 +1,10 @@
 import {
   task
-} from "../../../../chunk-E2WZMITO.mjs";
+} from "../../../../chunk-KUUZYT4B.mjs";
 import "../../../../chunk-TJGTO6YJ.mjs";
-import "../../../../chunk-2X26PNN2.mjs";
-import "../../../../chunk-NENC26SH.mjs";
+import "../../../../chunk-U3V65MN6.mjs";
+import "../../../../chunk-AHPEEFXO.mjs";
+import "../../../../chunk-4VA2IXQI.mjs";
 import {
   init_esm
 } from "../../../../chunk-CNFPS2CV.mjs";
@@ -28,9 +29,16 @@ var taskTask3 = task({
     return "foo-task-task-3-bar";
   }
 });
+var taskTask4 = task({
+  id: "task-task-4",
+  run: async () => {
+    return "foo-task-task-4-bar";
+  }
+});
 export {
   taskTask1,
   taskTask2,
-  taskTask3
+  taskTask3,
+  taskTask4
 };
 //# sourceMappingURL=testTasks.mjs.map

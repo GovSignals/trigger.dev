@@ -64,6 +64,8 @@ async function indexDeployment({
   try {
     const $env = await cliApiClient.getEnvironmentVariables(projectRef);
 
+    console.log("$env", $env);
+
     if (!$env.success) {
       throw new Error(`Failed to fetch environment variables: ${$env.error}`);
     }

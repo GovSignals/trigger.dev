@@ -5,7 +5,7 @@ import { BuildManifest, BuildRuntime } from "@trigger.dev/core/v3/schemas";
 import { networkInterfaces } from "os";
 import { join } from "path";
 import { safeReadJSONFile } from "../utilities/fileSystem.js";
-import { readFileSync } from "fs";
+import { cpSync, mkdirSync, readFileSync } from "fs";
 import { isLinux } from "std-env";
 import { z } from "zod";
 import { assertExhaustive } from "../utilities/assertExhaustive.js";
@@ -454,6 +454,8 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     "plain",
     "-t",
     options.imageTag,
+    "--output",
+    "type=local,dest=./docker-export",
     ".", // The build context
   ].filter(Boolean) as string[];
 
@@ -498,6 +500,27 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     // Always use the manifest (list) digest
     digest = meta.data["containerimage.digest"];
   }
+
+  // Copy the docker-export folder to the test directory
+  const testDir = "/Users/conneraldrich/Development/Projects/govsignals/trigger.dev/references/v3-catalog/test";
+  const dockerExportPath = join(options.cwd, "docker-export", "app");
+  
+  try {
+    // Ensure the test directory exists
+    mkdirSync(testDir, { recursive: true });
+
+    // Copy the docker-export folder to the test directory
+    cpSync(dockerExportPath, testDir, { recursive: true });
+    
+    logger.info(`Copied docker-export from ${dockerExportPath} to ${testDir}`);
+    options.onLog?.(`Copied docker-export to ${testDir}`);
+  } catch (e) {
+    logger.error("Failed to copy docker-export to test directory", {
+      error: e instanceof Error ? e.message : JSON.stringify(e),
+      source: dockerExportPath,
+      destination: testDir,
+      });
+    }
 
   // Get the image size
   const sizeProcess = x("docker", ["image", "inspect", options.imageTag, "--format={{.Size}}"], {

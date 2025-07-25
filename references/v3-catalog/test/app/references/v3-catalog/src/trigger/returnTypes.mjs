@@ -1,6 +1,16 @@
-import { task } from "@trigger.dev/sdk/v3";
+import {
+  task
+} from "../../../../chunk-E2WZMITO.mjs";
+import "../../../../chunk-TJGTO6YJ.mjs";
+import "../../../../chunk-2X26PNN2.mjs";
+import "../../../../chunk-NENC26SH.mjs";
+import {
+  init_esm
+} from "../../../../chunk-CNFPS2CV.mjs";
 
-export const returnAllTypes = task({
+// src/trigger/returnTypes.ts
+init_esm();
+var returnAllTypes = task({
   id: "return-all-types",
   run: async () => {
     const resultString = await returnString.triggerAndWait();
@@ -11,7 +21,6 @@ export const returnAllTypes = task({
     const resultUndefined = await returnUndefined.triggerAndWait();
     const resultObject = await returnObject.triggerAndWait();
     const resultArray = await returnArray.triggerAndWait();
-
     return {
       resultString,
       resultNumber,
@@ -20,63 +29,67 @@ export const returnAllTypes = task({
       resultNull,
       resultUndefined,
       resultObject,
-      resultArray,
+      resultArray
     };
-  },
+  }
 });
-
-export const returnString = task({
+var returnString = task({
   id: "return-string",
   run: async () => {
     return "This is a string";
-  },
+  }
 });
-
-export const returnNumber = task({
+var returnNumber = task({
   id: "return-number",
   run: async () => {
     return 46;
-  },
+  }
 });
-
-export const returnTrue = task({
+var returnTrue = task({
   id: "return-true",
   run: async () => {
     return true;
-  },
+  }
 });
-
-export const returnFalse = task({
+var returnFalse = task({
   id: "return-false",
   run: async () => {
     return false;
-  },
+  }
 });
-
-export const returnNull = task({
+var returnNull = task({
   id: "return-null",
   run: async () => {
     return null;
-  },
+  }
 });
-
-export const returnUndefined = task({
+var returnUndefined = task({
   id: "return-undefined",
   run: async () => {
-    return undefined;
-  },
+    return void 0;
+  }
 });
-
-export const returnObject = task({
+var returnObject = task({
   id: "return-object",
   run: async () => {
     return { key: "value" };
-  },
+  }
 });
-
-export const returnArray = task({
+var returnArray = task({
   id: "return-array",
   run: async () => {
     return [1, 2, 3];
-  },
+  }
 });
+export {
+  returnAllTypes,
+  returnArray,
+  returnFalse,
+  returnNull,
+  returnNumber,
+  returnObject,
+  returnString,
+  returnTrue,
+  returnUndefined
+};
+//# sourceMappingURL=returnTypes.mjs.map

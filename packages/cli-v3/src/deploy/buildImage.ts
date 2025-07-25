@@ -417,8 +417,8 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
 
   const apiUrl = normalizeApiUrlForBuild(options.apiUrl);
   const addHost = getAddHost(apiUrl);
-  const push = shouldPush(options.imageTag, options.push);
-  const load = shouldLoad(options.load, push);
+  const push = true;//shouldPush(options.imageTag, options.push); // TESTING
+  const load = true;//shouldLoad(options.load, push); // THIS IS NECESSARY
 
   await ensureQemuRegistered(options.imagePlatform);
 
@@ -434,7 +434,6 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     options.imagePlatform,
     options.network ? `--network=${options.network}` : undefined,
     addHost ? `--add-host=${addHost}` : undefined,
-    push ? "--push" : undefined,
     load ? "--load" : undefined,
     "--provenance",
     "false",
@@ -464,9 +463,7 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     "plain",
     "-t",
     options.imageTag,
-    "--output",
-    "type=local,dest=./docker-export",
-    ".", // The build context
+    ".",
   ].filter(Boolean) as string[];
 
   logger.info(`docker ${args.join(" ")}`, { cwd: options.cwd });
@@ -491,6 +488,81 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
       error: "Error building image",
       logs: extractLogs(errors),
     };
+  }
+
+  // Always extract files using docker cp
+  // Create the docker-export directory
+  mkdirSync(join(options.cwd, "docker-export"), { recursive: true });
+
+  // Create a temporary container to extract files
+  const containerName = `trigger-extract-${Date.now()}`;
+  
+  const createProcess = x("docker", ["create", "--name", containerName, options.imageTag], {
+    nodeOptions: { cwd: options.cwd },
+  });
+  
+  for await (const line of createProcess) {
+    errors.push(line);
+    logger.debug(line);
+  }
+  
+  if (createProcess.exitCode !== 0) {
+    return {
+      ok: false as const,
+      error: "Error creating container for file extraction",
+      logs: extractLogs(errors),
+    };
+  }
+
+  // Extract the files we need
+  const filesToExtract = ["/app/index.json", "/app/index-metadata.json", "/app/index-error.json"];
+  
+  for (const file of filesToExtract) {
+    const cpProcess = x("docker", ["cp", `${containerName}:${file}`, "./docker-export/"], {
+      nodeOptions: { cwd: options.cwd },
+    });
+    
+    for await (const line of cpProcess) {
+      logger.debug(line);
+    }
+  }
+
+  // Clean up the container
+  const rmProcess = x("docker", ["rm", containerName], {
+    nodeOptions: { cwd: options.cwd },
+  });
+  
+  for await (const line of rmProcess) {
+    logger.debug(line);
+  }
+
+  logger.debug("PUSH", push);
+
+  // If push is true, push the image
+  if (push) {
+    logger.debug("PUSHING IMAGE TO REGISTRY");
+    options.onLog?.("Pushing image to registry...");
+    
+    const pushProcess = x("docker", ["push", options.imageTag], {
+      nodeOptions: { cwd: options.cwd },
+    });
+    
+    for await (const line of pushProcess) {
+      errors.push(line);
+      logger.debug(line);
+      options.onLog?.(line);
+    }
+    
+    if (pushProcess.exitCode !== 0) {
+      return {
+        ok: false as const,
+        error: "Error pushing image to registry",
+        logs: extractLogs(errors),
+      };
+    }
+    
+    options.onLog?.("Image pushed successfully");
+    logger.debug("IMAGE PUSHED SUCCESSFULLY");
   }
 
   const metadataPath = join(options.cwd, "metadata.json");

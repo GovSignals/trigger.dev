@@ -912,10 +912,10 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
   // Simulate a deployment version
   const simulatedVersion = `build-${buildManifest.contentHash.substring(0, 8)}`;
   
-  // Construct imageTag with registry - always use localhost:5000 for build-only mode
+  // Construct imageTag with registry - always use localhost:5001 for build-only mode
   // In build-only mode, we don't have the server's registry info
   // This means build-only mode only works with local registries, not cloud registries
-  const imageTag = `localhost:5000/trigger/${resolvedConfig.project}:${buildManifest.contentHash.substring(0, 8)}`;
+  const imageTag = `localhost:5001/trigger/${resolvedConfig.project}:${buildManifest.contentHash.substring(0, 8)}`;
 
   const $imageSpinner = spinner();
   $imageSpinner.start("Building Docker image");

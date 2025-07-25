@@ -73,4 +73,22 @@ export const taskTask9 = task({
 });
 
 
+export const taskTask10 = task({
+  id: "task-task-10",
+  run: async () => {
+    return "foo-task-task-10-bar"
+  },
+});
+
+export const taskTask11 = task({
+  id: "task-task-11",
+  run: async () => {
+    return "foo-task-task-11-bar"
+  },
+});
+
+
+
+
+
 

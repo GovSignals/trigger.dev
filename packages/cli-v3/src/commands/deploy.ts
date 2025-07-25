@@ -909,7 +909,10 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
 
   // Simulate a deployment version
   const simulatedVersion = `build-${buildManifest.contentHash.substring(0, 8)}`;
-  const imageTag = `${resolvedConfig.project}:${buildManifest.contentHash.substring(0, 8)}`;
+  
+  // Construct imageTag with registry - always use localhost:5000 for build-only mode
+  // In build-only mode, we don't have the server's registry info
+  const imageTag = `localhost:5000/trigger/${resolvedConfig.project}:${buildManifest.contentHash.substring(0, 8)}`;
 
   const $imageSpinner = spinner();
   $imageSpinner.start("Building Docker image");
@@ -976,7 +979,7 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
       contentHash: buildManifest.contentHash,
       packageVersion: buildManifest.packageVersion,
       cliPackageVersion: buildManifest.cliPackageVersion,
-      features: buildManifest.features,
+      features: (buildManifest as unknown as any).features,
       deploy: buildManifest.deploy,
     },
     indexMetadata,

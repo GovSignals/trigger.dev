@@ -469,7 +469,7 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     ".", // The build context
   ].filter(Boolean) as string[];
 
-  logger.debug(`docker ${args.join(" ")}`, { cwd: options.cwd });
+  logger.info(`docker ${args.join(" ")}`, { cwd: options.cwd });
 
   const errors: string[] = [];
 

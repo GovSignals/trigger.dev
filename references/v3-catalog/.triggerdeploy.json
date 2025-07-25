@@ -1,20 +1,20 @@
 {
   "environment": "prod",
-  "contentHash": "e53f6d5a7ac29d990d8c531f9a446d70",
-  "imageTag": "localhost:5000/trigger/yubjwjsfkxnylobaqvqz:e53f6d5a",
-  "imageDigest": "sha256:5761e6427212027f07dd57958330e9620be2ffd9536777f7bf543d334b70d728",
+  "contentHash": "5ef2047416ea85d606553e8b298d34d8",
+  "imageTag": "localhost:5000/trigger/proj_xgsjgjdgoycfxlkwkrhz:5ef20474",
+  "imageDigest": "sha256:ef3fef975ed6edbb1dde57df56190c9a323e9317ea95bbe79b1a268c63889ad2",
   "runtime": "node",
-  "taskCount": 14,
+  "taskCount": 18,
   "gitMeta": {
     "remoteUrl": "https://github.com/GovSignals/trigger.dev.git",
     "commitAuthorName": "Conner",
-    "commitMessage": "Note",
+    "commitMessage": "Remove test folder",
     "commitRef": "codex/add-two-phase-deploy-for-trigger.dev-cli",
-    "commitSha": "eddafaaa0b900e5dea7ab7cf2539c0c77004a989",
+    "commitSha": "848ffc19f872909e36426bf9b62535cbd9e7e611",
     "dirty": true
   },
   "buildManifest": {
-    "contentHash": "e53f6d5a7ac29d990d8c531f9a446d70",
+    "contentHash": "5ef2047416ea85d606553e8b298d34d8",
     "packageVersion": "4.0.0-v4-beta.24",
     "cliPackageVersion": "4.0.0-v4-beta.24",
     "deploy": {
@@ -22,7 +22,7 @@
     }
   },
   "indexMetadata": {
-    "contentHash": "e53f6d5a7ac29d990d8c531f9a446d70",
+    "contentHash": "5ef2047416ea85d606553e8b298d34d8",
     "packageVersion": "4.0.0-v4-beta.24",
     "cliPackageVersion": "4.0.0-v4-beta.24",
     "tasks": [
@@ -249,6 +249,70 @@
         "maxDuration": 3600,
         "filePath": "src/trigger/testTasks.ts",
         "entryPoint": "/app/references/v3-catalog/src/trigger/testTasks.mjs"
+      },
+      {
+        "id": "task-task-6",
+        "retry": {
+          "maxAttempts": 10,
+          "factor": 2,
+          "minTimeoutInMs": 5000,
+          "maxTimeoutInMs": 30000,
+          "randomize": true
+        },
+        "machine": {
+          "preset": "medium-1x"
+        },
+        "maxDuration": 3600,
+        "filePath": "src/trigger/testTasks.ts",
+        "entryPoint": "/app/references/v3-catalog/src/trigger/testTasks.mjs"
+      },
+      {
+        "id": "task-task-7",
+        "retry": {
+          "maxAttempts": 10,
+          "factor": 2,
+          "minTimeoutInMs": 5000,
+          "maxTimeoutInMs": 30000,
+          "randomize": true
+        },
+        "machine": {
+          "preset": "medium-1x"
+        },
+        "maxDuration": 3600,
+        "filePath": "src/trigger/testTasks.ts",
+        "entryPoint": "/app/references/v3-catalog/src/trigger/testTasks.mjs"
+      },
+      {
+        "id": "task-task-8",
+        "retry": {
+          "maxAttempts": 10,
+          "factor": 2,
+          "minTimeoutInMs": 5000,
+          "maxTimeoutInMs": 30000,
+          "randomize": true
+        },
+        "machine": {
+          "preset": "medium-1x"
+        },
+        "maxDuration": 3600,
+        "filePath": "src/trigger/testTasks.ts",
+        "entryPoint": "/app/references/v3-catalog/src/trigger/testTasks.mjs"
+      },
+      {
+        "id": "task-task-9",
+        "retry": {
+          "maxAttempts": 10,
+          "factor": 2,
+          "minTimeoutInMs": 5000,
+          "maxTimeoutInMs": 30000,
+          "randomize": true
+        },
+        "machine": {
+          "preset": "medium-1x"
+        },
+        "maxDuration": 3600,
+        "filePath": "src/trigger/testTasks.ts",
+        "entryPoint": "/app/references/v3-catalog/src/trigger/testTasks.mjs"
       }
     ],
     "queues": [],
@@ -270,14 +334,18 @@
         "filePath": "src/trigger/returnTypes.ts"
       },
       {
-        "contents": "eJyVzU0KgzAQhuF9TvGRlYJW/Nsolh6iF0g1iohJSaK0iHcvuir9CWYzzMA7PP14l8pggWF6wIpWyRH0YlTfdVydGj5HuhmiOaWE8Mfe1lJos/dXpocY1b57CwH6pgDdrnAfMQ0IoCZRgOmnqOH5qM7YSkBxMykB2koZvr2EN6ZoSYA1IKtfkj9sYmETdzY5yKYWNnVn0y/2p5pZ1MxdzY6puUXN3dX8U30Bps6/7w==",
-        "contentHash": "d1e667c23fee9aa00e253f3e9339ea23",
+        "contents": "eJyV0UtuwjAQBuC9T/HLK5BMUV6QBFH1EN0hFoY4KEqwUydBtCh3r+I2LVJb19nYntF4Po2mONdKt7ih5U2JHrlWZ9CnVhenk9APmbgsm6xcXgJKiLia2qOSTWvqn3lTetia9+xGgCJLQYdoYQ6PMgLoTqbgzas8YjbH9hFDJaBF22kJmiu1uPuyOHBNNwToGennG/IH61tYfzrrO7KBhQ2ms8EP9lc1tKjhdDV0UyOLGk1XIzd1ZVFXDuoujBhoJzORF1JklEF2VbX/j11b2LUD+xEAuVIp6DAp+8wc+FuKMBrDl+6aYucx+AzB/js7pMcmJh4S1NxfrXoyntZZYsss8fTFxW6LSyxq4rK4JGGgvK4rQe/XRcg7UERbgg==",
+        "contentHash": "ff4f11f8e4fd3345da65b7fa2117ba51",
         "taskIds": [
           "task-task-1",
           "task-task-2",
           "task-task-3",
           "task-task-4",
-          "task-task-5"
+          "task-task-5",
+          "task-task-6",
+          "task-task-7",
+          "task-task-8",
+          "task-task-9"
         ],
         "filePath": "src/trigger/testTasks.ts"
       },
@@ -305,6 +373,6 @@
     "buildPlatform": "linux/arm64",
     "targetPlatform": "linux/amd64"
   },
-  "simulatedVersion": "build-e53f6d5a",
-  "buildPath": "/Users/conneraldrich/Development/Projects/govsignals/trigger.dev/references/v3-catalog/.trigger/tmp/build-q06Clp"
+  "simulatedVersion": "build-5ef20474",
+  "buildPath": "/Users/conneraldrich/Development/Projects/govsignals/trigger.dev/references/v3-catalog/.trigger/tmp/build-bGOsMj"
 }

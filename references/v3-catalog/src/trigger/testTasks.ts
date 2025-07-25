@@ -36,3 +36,41 @@ export const taskTask5 = task({
     return "foo-task-task-5-bar";
   },
 });
+
+export const taskTask6 = task({
+  id: "task-task-6",
+  run: async () => {
+    return [45, "undefined", null]
+  },
+});
+
+export const taskTask7 = task({
+  id: "task-task-7",
+  run: async () => {
+    return {
+      foo: "bar",
+      baz: 45,
+      qux: [1, 2, 3],
+      quux: {
+        quuux: "quuux",
+      }
+    }
+  },
+});
+
+export const taskTask8 = task({
+  id: "task-task-8",
+  run: async () => {
+    return "foo-task-task-8-bar";
+  },
+});
+
+export const taskTask9 = task({
+  id: "task-task-9",
+  run: async () => {
+    return [99, "apple"]
+  },
+});
+
+
+

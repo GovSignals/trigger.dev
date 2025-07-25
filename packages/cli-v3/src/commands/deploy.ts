@@ -42,6 +42,7 @@ import { archivePreviewBranch } from "./preview.js";
 import { updateTriggerPackages } from "./update.js";
 import { writeJSONFile, readJSONFile, pathExists } from "../utilities/fileSystem.js";
 import { alwaysExternal } from "@trigger.dev/core/v3/build";
+import { readdirSync } from "node:fs";
 
 const DeployCommandOptions = CommonCommandOptions.extend({
   dryRun: z.boolean().default(false),
@@ -501,19 +502,23 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
   // still happens during the Docker build but doesn't make API calls from within the container.
   // TODO: Consider extracting index files from remote builds or using a different approach.
   if (isLocalBuild) {
-    const dockerExportPath = join(destination.path, "docker-export", "app");
+    const dockerExportPath = join(destination.path, "docker-export");
     const indexMetadataPath = join(dockerExportPath, "index-metadata.json");
     const indexErrorPath = join(dockerExportPath, "index-error.json");
 
-    // List the contents of the docker export path for debugging
-    // try {
-    //   const dockerExportContents = await readdir(dockerExportPath);
-    //   logger.debug("Docker export path contents", { dockerExportPath, contents: dockerExportContents });
-    // } catch (error) {
-    //   logger.debug("Failed to list docker export path contents", { dockerExportPath, error: error instanceof Error ? error.message : String(error) });
-    // }
-    
     logger.debug("Checking for index files", { dockerExportPath, indexMetadataPath, indexErrorPath });
+
+    // Verify the docker export directory exists
+    if (!(await pathExists(dockerExportPath))) {
+      await failDeploy(
+        projectClient.client,
+        deployment,
+        { name: "BuildError", message: "Docker export directory not found - indexing files were not extracted from the build" },
+        buildResult.logs,
+        $spinner
+      );
+      throw new SkipLoggingError("Failed to extract indexing files from Docker build");
+    }
 
     // Check if there was an indexing error
     if (await pathExists(indexErrorPath)) {
@@ -528,10 +533,31 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
       throw new SkipLoggingError(`Indexing failed: ${JSON.stringify(indexError.error)}`);
     }
 
-    // Read the index metadata
-    if (await pathExists(indexMetadataPath)) {
-      logger.debug("Found index-metadata.json, creating background worker");
-      const indexMetadata = await readJSONFile(indexMetadataPath);
+    // Read the index metadata - this is REQUIRED
+    if (!(await pathExists(indexMetadataPath))) {
+      await failDeploy(
+        projectClient.client,
+        deployment,
+        { name: "BuildError", message: "index-metadata.json not found - the Docker build did not produce required indexing output" },
+        buildResult.logs,
+        $spinner
+      );
+      throw new SkipLoggingError("Missing critical index-metadata.json file");
+    }
+
+    logger.debug("Found index-metadata.json, creating background worker");
+    const indexMetadata = await readJSONFile(indexMetadataPath);
+    
+    if (!indexMetadata || typeof indexMetadata !== 'object') {
+      await failDeploy(
+        projectClient.client,
+        deployment,
+        { name: "BuildError", message: "index-metadata.json is invalid or empty" },
+        buildResult.logs,
+        $spinner
+      );
+      throw new SkipLoggingError("Invalid index-metadata.json file");
+    }
       
       const backgroundWorkerBody: CreateBackgroundWorkerRequestBody = {
         localOnly: true,
@@ -576,9 +602,6 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
           })
         );
       }
-    } else {
-      logger.warn("No index-metadata.json found", { path: indexMetadataPath });
-    }
   } else {
     // Remote builds (Depot) still perform indexing and API calls during the Docker build
     logger.debug("Remote build detected - indexing won't happen here");
@@ -943,30 +966,27 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
     builder: options.builder,
   });
 
-  if (!buildResult.ok) {
-    $imageSpinner.stop("Failed to build image");
-    throw new Error(buildResult.error);
-  }
-
-  $imageSpinner.stop("Successfully built image");
-
   // Check for indexing results in build-only mode
-  const dockerExportPath = join(destination.path, "docker-export", "app");
+  const dockerExportPath = join(destination.path, "docker-export");
   const indexMetadataPath = join(dockerExportPath, "index-metadata.json");
   const indexErrorPath = join(dockerExportPath, "index-error.json");
 
+  // Check if there was an indexing error
   if (await pathExists(indexErrorPath)) {
     const indexError = await readJSONFile(indexErrorPath);
-    log.error(`Indexing failed: ${JSON.stringify(indexError.error)}`);
+    $imageSpinner.stop("Failed to build image");
+    throw new Error(`Indexing failed: ${JSON.stringify(indexError.error)}`);
   }
 
-  let taskCount = 0;
-  let indexMetadata = null;
-  if (await pathExists(indexMetadataPath)) {
-    indexMetadata = await readJSONFile(indexMetadataPath);
-    taskCount = indexMetadata.tasks?.length || 0;
-    log.success(`Indexed ${taskCount} task${taskCount === 1 ? "" : "s"}`);
+  // Check for index metadata - this is required
+  if (!(await pathExists(indexMetadataPath))) {
+    $imageSpinner.stop("Failed to build image");
+    throw new Error("index-metadata.json not found - the Docker build did not produce required indexing output");
   }
+
+  const indexMetadata = await readJSONFile(indexMetadataPath);
+  const taskCount = indexMetadata.tasks?.length || 0;
+  log.success(`Indexed ${taskCount} task${taskCount === 1 ? "" : "s"}`);
 
   // Save all necessary data for registerOnlyDeploy
   const deployData = {
@@ -974,7 +994,7 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
     branch,
     contentHash: buildManifest.contentHash,
     imageTag,
-    imageDigest: buildResult.digest,
+    imageDigest: (buildResult as unknown as { digest?: string }).digest,
     runtime: buildManifest.runtime,
     taskCount,
     gitMeta,
@@ -991,6 +1011,13 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
   };
 
   await writeJSONFile(join(projectPath, ".triggerdeploy.json"), deployData, true);
+
+  if (!buildResult.ok) {
+    $imageSpinner.stop("Failed to build image");
+    throw new Error(buildResult.error);
+  }
+
+  $imageSpinner.stop("Successfully built image");
 
   if (options.saveLogs) {
     const logPath = await saveLogs(simulatedVersion, buildResult.logs);

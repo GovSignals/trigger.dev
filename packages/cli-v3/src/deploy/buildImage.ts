@@ -5,7 +5,7 @@ import { BuildManifest, BuildRuntime } from "@trigger.dev/core/v3/schemas";
 import { networkInterfaces } from "os";
 import { join } from "path";
 import { safeReadJSONFile } from "../utilities/fileSystem.js";
-import { cpSync, mkdirSync, readFileSync } from "fs";
+import { cpSync, mkdirSync, readFileSync, statSync } from "fs";
 import { isLinux } from "std-env";
 import { z } from "zod";
 import { assertExhaustive } from "../utilities/assertExhaustive.js";
@@ -492,10 +492,18 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
 
   // Always extract files using docker cp
   // Create the docker-export directory
-  mkdirSync(join(options.cwd, "docker-export"), { recursive: true });
+  const dockerExportDir = join(options.cwd, "docker-export");
+  logger.debug("Creating docker-export directory", { path: dockerExportDir });
+  mkdirSync(dockerExportDir, { recursive: true });
 
   // Create a temporary container to extract files
   const containerName = `trigger-extract-${Date.now()}`;
+  
+  logger.debug("Creating container for file extraction", { 
+    containerName, 
+    imageTag: options.imageTag,
+    cwd: options.cwd 
+  });
   
   const createProcess = x("docker", ["create", "--name", containerName, options.imageTag], {
     nodeOptions: { cwd: options.cwd },
@@ -507,25 +515,137 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
   }
   
   if (createProcess.exitCode !== 0) {
+    logger.error("Failed to create extraction container", { 
+      exitCode: createProcess.exitCode,
+      containerName,
+      imageTag: options.imageTag 
+    });
     return {
       ok: false as const,
       error: "Error creating container for file extraction",
       logs: extractLogs(errors),
     };
   }
+  
+  logger.debug("Container created successfully", { containerName });
 
   // Extract the files we need
-  const filesToExtract = ["/app/index.json", "/app/index-metadata.json", "/app/index-error.json"];
+  const filesToExtract = [
+    { source: "/app/index.json", dest: "index.json", required: true },
+    { source: "/app/index-metadata.json", dest: "index-metadata.json", required: true },
+    { source: "/app/index-error.json", dest: "index-error.json", required: false },
+  ];
   
-  for (const file of filesToExtract) {
-    const cpProcess = x("docker", ["cp", `${containerName}:${file}`, "./docker-export/"], {
+  logger.debug("Starting file extraction", { 
+    filesToExtract,
+    targetDir: dockerExportDir 
+  });
+  
+  for (const { source, dest, required } of filesToExtract) {
+    logger.debug("Extracting file from container", { 
+      source, 
+      dest, 
+      required,
+      containerName,
+      targetPath: join(dockerExportDir, dest)
+    });
+    
+    const cpCommand = ["cp", `${containerName}:${source}`, "./docker-export/"];
+    logger.debug("Running docker cp command", { command: `docker ${cpCommand.join(" ")}` });
+    
+    const cpProcess = x("docker", cpCommand, {
       nodeOptions: { cwd: options.cwd },
     });
     
+    const cpErrors: string[] = [];
     for await (const line of cpProcess) {
-      logger.debug(line);
+      cpErrors.push(line);
+      logger.debug(`docker cp output: ${line}`);
+    }
+    
+    logger.debug("Docker cp process completed", { 
+      exitCode: cpProcess.exitCode,
+      source,
+      errorCount: cpErrors.length
+    });
+    
+    if (cpProcess.exitCode !== 0) {
+      logger.error("Failed to extract file", { 
+        source, 
+        required, 
+        exitCode: cpProcess.exitCode,
+        errors: cpErrors 
+      });
+      
+      if (required) {
+        logger.error("Critical file extraction failed, cleaning up container");
+        // Clean up the container before failing
+        await x("docker", ["rm", containerName], { nodeOptions: { cwd: options.cwd } });
+        
+        return {
+          ok: false as const,
+          error: `Failed to extract critical file ${source} from container: ${cpErrors.join("\n")}`,
+          logs: extractLogs(errors),
+        };
+      } else {
+        logger.warn(`Failed to extract optional file ${source}, continuing...`);
+      }
+    } else {
+      logger.debug("File extraction successful", { source, dest });
+    }
+    
+    // Verify the file was actually copied
+    if (required) {
+      const extractedPath = join(options.cwd, "docker-export", dest);
+      logger.debug("Verifying extracted file", { path: extractedPath });
+      
+      try {
+        const stats = statSync(extractedPath);
+        if (!stats.isFile()) {
+          logger.error("Extracted path is not a file", { 
+            path: extractedPath, 
+            isDirectory: stats.isDirectory(),
+            mode: stats.mode 
+          });
+          
+          // Clean up the container before failing
+          logger.debug("Cleaning up container before failing");
+          await x("docker", ["rm", containerName], { nodeOptions: { cwd: options.cwd } });
+          
+          return {
+            ok: false as const,
+            error: `Extracted file ${dest} is not a valid file at ${extractedPath}`,
+            logs: extractLogs(errors),
+          };
+        }
+        logger.debug(`Successfully verified extracted file`, { 
+          source,
+          dest,
+          path: extractedPath,
+          sizeBytes: stats.size,
+          modified: stats.mtime
+        });
+      } catch (e) {
+        logger.error("Failed to verify extracted file", { 
+          path: extractedPath,
+          error: e instanceof Error ? e.message : String(e),
+          errorType: e?.constructor?.name
+        });
+        
+        // Clean up the container before failing
+        logger.debug("Cleaning up container before failing");
+        await x("docker", ["rm", containerName], { nodeOptions: { cwd: options.cwd } });
+        
+        return {
+          ok: false as const,
+          error: `Failed to verify extracted file ${dest}: ${e instanceof Error ? e.message : String(e)}`,
+          logs: extractLogs(errors),
+        };
+      }
     }
   }
+
+  logger.debug("All files extracted successfully, cleaning up container", { containerName });
 
   // Clean up the container
   const rmProcess = x("docker", ["rm", containerName], {
@@ -533,8 +653,10 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
   });
   
   for await (const line of rmProcess) {
-    logger.debug(line);
+    logger.debug(`docker rm output: ${line}`);
   }
+  
+  logger.debug("Container cleanup completed", { exitCode: rmProcess.exitCode });
 
   logger.debug("PUSH", push);
 

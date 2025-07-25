@@ -847,6 +847,7 @@ async function failDeploy(
   }
 }
 
+// WIP - UNTESTED - NEEDS TO BE FINISHED
 async function buildOnlyDeploy(projectPath: string, dir: string, options: DeployCommandOptions) {
   if (!options.skipUpdateCheck) {
     await updateTriggerPackages(dir, { ...options }, true, true);
@@ -963,6 +964,7 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
   );
 }
 
+// WIP - UNTESTED - NEEDS TO BE FINISHED
 async function registerOnlyDeploy(projectPath: string, dir: string, options: DeployCommandOptions) {
   if (!options.skipUpdateCheck) {
     await updateTriggerPackages(dir, { ...options }, true, true);

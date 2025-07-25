@@ -658,7 +658,27 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
   
   logger.debug("Container cleanup completed", { exitCode: rmProcess.exitCode });
 
+  // Get the digest from the build metadata first
+  const metadataPath = join(options.cwd, "metadata.json");
+  const rawMetadata = await safeReadJSONFile(metadataPath);
+
+  const meta = BuildKitMetadata.safeParse(rawMetadata);
+
+  let buildDigest: string | undefined;
+  if (!meta.success) {
+    logger.error("Failed to parse metadata.json", {
+      errors: meta.error.message,
+      path: metadataPath,
+    });
+  } else {
+    logger.debug("Parsed metadata.json", { metadata: meta.data, path: metadataPath });
+    buildDigest = meta.data["containerimage.digest"];
+    logger.info("Build digest from metadata.json", { buildDigest });
+  }
+
   logger.debug("PUSH", push);
+
+  let finalDigest: string | undefined = buildDigest;
 
   // If push is true, push the image
   if (push) {
@@ -685,24 +705,49 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     
     options.onLog?.("Image pushed successfully");
     logger.debug("IMAGE PUSHED SUCCESSFULLY");
-  }
 
-  const metadataPath = join(options.cwd, "metadata.json");
-  const rawMetadata = await safeReadJSONFile(metadataPath);
-
-  const meta = BuildKitMetadata.safeParse(rawMetadata);
-
-  let digest: string | undefined;
-  if (!meta.success) {
-    logger.error("Failed to parse metadata.json", {
-      errors: meta.error.message,
-      path: metadataPath,
+    // Get the digest of the pushed image
+    const inspectProcess = x("docker", ["inspect", "--format={{index .RepoDigests 0}}", options.imageTag], {
+      nodeOptions: { cwd: options.cwd },
     });
-  } else {
-    logger.debug("Parsed metadata.json", { metadata: meta.data, path: metadataPath });
+    
+    let pushedDigest: string | undefined;
+    for await (const line of inspectProcess) {
+      if (line.trim()) {
+        // Extract just the digest part (after the @)
+        const parts = line.trim().split('@');
+        if (parts.length === 2) {
+          pushedDigest = parts[1];
+        }
+        break;
+      }
+    }
+    
+    if (pushedDigest) {
+      logger.info("Push digest from docker inspect", { pushedDigest });
+      finalDigest = pushedDigest;
+      
+      // IMPORTANT NOTE: We must use the pushed digest for the final digest or else shas don't match and this fails
 
-    // Always use the manifest (list) digest
-    digest = meta.data["containerimage.digest"];
+      // Compare digests
+      // if (buildDigest && buildDigest !== pushedDigest) {
+      //   logger.error("Digest mismatch detected!", {
+      //     buildDigest,
+      //     pushedDigest,
+      //     imageTag: options.imageTag,
+      //     imagePlatform: options.imagePlatform
+      //   });
+        
+      //   // For multi-platform builds, this is expected behavior
+      //   if (options.imagePlatform.includes(",")) {
+      //     logger.warn("Multi-platform build detected. Using pushed manifest list digest instead of build digest.");
+      //   } else {
+      //     throw new Error(`Digest mismatch: build digest (${buildDigest}) != push digest (${pushedDigest})`);
+      //   }
+      // }
+    } else {
+      logger.warn("Could not retrieve push digest from docker inspect");
+    }
   }
 
   // Copy the docker-export folder to the test directory
@@ -749,7 +794,7 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
   return {
     ok: true as const,
     imageSizeBytes,
-    digest,
+    digest: finalDigest,
     logs: extractLogs(errors),
   };
 }

@@ -1,8 +1,8 @@
 {
   "environment": "prod",
   "contentHash": "0f7d1460d7d7f4b4025bb28a10f8c7ef",
-  "imageTag": "host.docker.internal:5001/trigger/proj_xgsjgjdgoycfxlkwkrhz:0f7d1460",
-  "imageDigest": "sha256:0c84aee65c7f120424a3a37b7c6c90b833003cef1d42f4078b8d3c1c9fcd799e",
+  "imageTag": "localhost:5001/trigger/proj_xgsjgjdgoycfxlkwkrhz:0f7d1460",
+  "imageDigest": "sha256:cc600ae0884b6d4086262823dd55e8ba3ea49b386013cba4b094c0b62fcfd0c4",
   "runtime": "node",
   "taskCount": 21,
   "gitMeta": {
@@ -10,7 +10,7 @@
     "commitAuthorName": "Conner",
     "commitMessage": "WIP",
     "commitRef": "codex/add-two-phase-deploy-for-trigger.dev-cli",
-    "commitSha": "2feab272fbe858b56b70d0e703cd342c65676eeb",
+    "commitSha": "a77b2a013c8a2a5fab587145da93538cf0b76f81",
     "dirty": true
   },
   "buildManifest": {
@@ -425,5 +425,5 @@
     "targetPlatform": "linux/amd64"
   },
   "simulatedVersion": "build-0f7d1460",
-  "buildPath": "/Users/conneraldrich/Development/Projects/govsignals/trigger.dev/references/v3-catalog/.trigger/tmp/build-K9tsbE"
+  "buildPath": "/Users/conneraldrich/Development/Projects/govsignals/trigger.dev/references/v3-catalog/.trigger/tmp/build-LXesgf"
 }

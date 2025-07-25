@@ -87,6 +87,12 @@ export const taskTask11 = task({
   },
 });
 
+export const taskTask12 = task({
+  id: "task-task-12",
+  run: async () => {
+    return "foo-task-task-12-bar"
+  },
+});
 
 
 

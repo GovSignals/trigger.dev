@@ -94,6 +94,13 @@ export const taskTask12 = task({
   },
 });
 
+export const taskTask13 = task({
+  id: "task-task-13",
+  run: async () => {
+    return ["foo-task-task-13-bar",44]
+  },
+});
+
 
 
 

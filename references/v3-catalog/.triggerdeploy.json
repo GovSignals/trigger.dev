@@ -1,20 +1,20 @@
 {
   "environment": "prod",
-  "contentHash": "0f7d1460d7d7f4b4025bb28a10f8c7ef",
-  "imageTag": "localhost:5001/trigger/proj_xgsjgjdgoycfxlkwkrhz:0f7d1460",
-  "imageDigest": "sha256:cc600ae0884b6d4086262823dd55e8ba3ea49b386013cba4b094c0b62fcfd0c4",
+  "contentHash": "05ee35626cd1e3fb9b2f282a3521b1bb",
+  "imageTag": "localhost:5001/trigger/proj_xgsjgjdgoycfxlkwkrhz:05ee3562",
+  "imageDigest": "sha256:04beee6de323724e3cae942c08a6c87defbd95ccc1fe7c0f0ec0ceb2c3328999",
   "runtime": "node",
-  "taskCount": 21,
+  "taskCount": 22,
   "gitMeta": {
     "remoteUrl": "https://github.com/GovSignals/trigger.dev.git",
     "commitAuthorName": "Conner",
-    "commitMessage": "WIP",
+    "commitMessage": "Worked???",
     "commitRef": "codex/add-two-phase-deploy-for-trigger.dev-cli",
-    "commitSha": "a77b2a013c8a2a5fab587145da93538cf0b76f81",
+    "commitSha": "719b5915e2ac43b1c1085c46f38a4369e3e0ad7b",
     "dirty": true
   },
   "buildManifest": {
-    "contentHash": "0f7d1460d7d7f4b4025bb28a10f8c7ef",
+    "contentHash": "05ee35626cd1e3fb9b2f282a3521b1bb",
     "packageVersion": "4.0.0-v4-beta.24",
     "cliPackageVersion": "4.0.0-v4-beta.24",
     "deploy": {
@@ -22,7 +22,7 @@
     }
   },
   "indexMetadata": {
-    "contentHash": "0f7d1460d7d7f4b4025bb28a10f8c7ef",
+    "contentHash": "05ee35626cd1e3fb9b2f282a3521b1bb",
     "packageVersion": "4.0.0-v4-beta.24",
     "cliPackageVersion": "4.0.0-v4-beta.24",
     "tasks": [
@@ -361,6 +361,22 @@
         "maxDuration": 3600,
         "filePath": "src/trigger/testTasks.ts",
         "entryPoint": "/app/references/v3-catalog/src/trigger/testTasks.mjs"
+      },
+      {
+        "id": "task-task-13",
+        "retry": {
+          "maxAttempts": 10,
+          "factor": 2,
+          "minTimeoutInMs": 5000,
+          "maxTimeoutInMs": 30000,
+          "randomize": true
+        },
+        "machine": {
+          "preset": "medium-1x"
+        },
+        "maxDuration": 3600,
+        "filePath": "src/trigger/testTasks.ts",
+        "entryPoint": "/app/references/v3-catalog/src/trigger/testTasks.mjs"
       }
     ],
     "queues": [],
@@ -382,8 +398,8 @@
         "filePath": "src/trigger/returnTypes.ts"
       },
       {
-        "contents": "eJyd1N1ugjAUB/D7PsU/vdKkTsuHAsZlD7E74wVKMURtWQHjZnj3hW5uy+ZqkYvCOWn7y8kJpziUStc4o06rHVrkWh1An2pdbLdCP2TiOK6y3fjoU0LEyezdKFnVZv9zWu04FuZ7cCZAkSWgXTQyC6eMALqRCdLqVW4wGGLxiG4noEXdaAmaKzX6cWS0TjWdE6BlpB3OyT+sZ2G9/qznyPoW1u/P+n/Yq2pgUYP+auCmhhY17K+GburUok4d1GUQMtBGZiIvpMgog2z2+9UtdmZhZw7sRwDkSiWgXaXsM7NO3xIE4SV8aU4JlpzBY/BX39kufbnExF2CmvfXVS25rNZaIkstUf/GRW6Niy1q7NK4OGagaVnuBV3d/BH5xDZ3JncMnokp81aV3Drv7hl43M21DTx+x8Tj3m+3e94B8Q7Gzg==",
-        "contentHash": "62b85f14f7d30bc2785e06adc114bfe2",
+        "contents": "eJyd1N9ugjAUBvD7PsWXXmlSp4WignHZQ+zOeIGjGKK2roBxM7z7Qp37v1q8KZyT0l9OGr5it9emwglVWm7QIDd6B/pQmWK9luYuk4dhmW2Gh5ASIo9275NWZWX3P6blhmNu33snAhRZAtpWA7twyghgapUgLV/UE3p9zO/R7gSMrGqjQHOtB18+GaxSQ2cEaBhp+jPyDxs42KA7G3iyoYMNu7PhL/ZPVThU0V0VfmrkUKPuauSnjh3q2ENdiIiB1iqTeaFkRhlUvd0ur7ETBzvxYM8FkGudgLaTsvfOKn1NIKJL+VwfEyw4Q8AQLj+7bftyiK3bBrXPj6Maclmds0wds0y7X9zU7+Jihxr7XFwcM9B0v99Kurz6I/KRK3dGNwTPyI55bUruzLtbAo/7ua7A4zckHg/8XFficZ/IW/yEz6HHhPh2y4SQN0Wp69o=",
+        "contentHash": "87ab4d73e2a22ab6f1ef34b3db09d0a1",
         "taskIds": [
           "task-task-1",
           "task-task-2",
@@ -396,7 +412,8 @@
           "task-task-9",
           "task-task-10",
           "task-task-11",
-          "task-task-12"
+          "task-task-12",
+          "task-task-13"
         ],
         "filePath": "src/trigger/testTasks.ts"
       },
@@ -424,6 +441,6 @@
     "buildPlatform": "linux/arm64",
     "targetPlatform": "linux/amd64"
   },
-  "simulatedVersion": "build-0f7d1460",
-  "buildPath": "/Users/conneraldrich/Development/Projects/govsignals/trigger.dev/references/v3-catalog/.trigger/tmp/build-LXesgf"
+  "simulatedVersion": "build-05ee3562",
+  "buildPath": "/Users/conneraldrich/Development/Projects/govsignals/trigger.dev/references/v3-catalog/.trigger/tmp/build-iI7abc"
 }

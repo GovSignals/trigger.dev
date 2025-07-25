@@ -35,7 +35,7 @@ export const returnString = task({
 export const returnNumber = task({
   id: "return-number",
   run: async () => {
-    return 42;
+    return 45;
   },
 });
 

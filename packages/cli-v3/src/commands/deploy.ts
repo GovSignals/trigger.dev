@@ -306,7 +306,7 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
           $buildSpinner.start("Building trigger code");
         },
         onBundleComplete(result) {
-          $buildSpinner.stop("Successfully built code");
+          $buildSpinner.stop("Successfully built code. FOOBAR");
 
           logger.debug("Bundle result", result);
         },

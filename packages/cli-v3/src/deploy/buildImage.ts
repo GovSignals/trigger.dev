@@ -39,6 +39,7 @@ export interface BuildImageOptions {
   apiKey: string;
   branchName?: string;
   buildEnvVars?: Record<string, string | undefined>;
+  indexEnvVars?: Record<string, string>; // Environment variables for indexing
   onLog?: (log: string) => void;
 
   // Optional deployment spinner
@@ -68,6 +69,7 @@ export async function buildImage(options: BuildImageOptions): Promise<BuildImage
     apiKey,
     branchName,
     buildEnvVars,
+    indexEnvVars,
     network,
     builder,
     onLog,
@@ -91,6 +93,7 @@ export async function buildImage(options: BuildImageOptions): Promise<BuildImage
       apiKey,
       branchName,
       buildEnvVars,
+      indexEnvVars,
       network,
       builder,
       onLog,
@@ -122,6 +125,7 @@ export async function buildImage(options: BuildImageOptions): Promise<BuildImage
     apiKey,
     branchName,
     buildEnvVars,
+    indexEnvVars,
     onLog,
   });
 }
@@ -145,6 +149,7 @@ export interface DepotBuildImageOptions {
   noCache?: boolean;
   extraCACerts?: string;
   buildEnvVars?: Record<string, string | undefined>;
+  indexEnvVars?: Record<string, string>;
   onLog?: (log: string) => void;
 }
 
@@ -196,6 +201,8 @@ async function remoteBuildImage(options: DepotBuildImageOptions): Promise<BuildI
     `TRIGGER_PREVIEW_BRANCH=${options.branchName ?? ""}`,
     "--build-arg",
     `TRIGGER_SECRET_KEY=${options.apiKey}`,
+    "--build-arg",
+    `TRIGGER_ENV_VARS=${JSON.stringify(options.indexEnvVars || {})}`,
     ...(buildArgs || []),
     ...(options.extraCACerts ? ["--build-arg", `NODE_EXTRA_CA_CERTS=${options.extraCACerts}`] : []),
     "--progress",
@@ -298,6 +305,7 @@ interface SelfHostedBuildImageOptions {
   noCache?: boolean;
   extraCACerts?: string;
   buildEnvVars?: Record<string, string | undefined>;
+  indexEnvVars?: Record<string, string>;
   network?: string;
   builder: string;
   load?: boolean;
@@ -448,6 +456,8 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     `TRIGGER_PREVIEW_BRANCH=${options.branchName ?? ""}`,
     "--build-arg",
     `TRIGGER_SECRET_KEY=${options.apiKey}`,
+    "--build-arg",
+    `TRIGGER_ENV_VARS=${JSON.stringify(options.indexEnvVars || {})}`,
     ...(buildArgs || []),
     ...(options.extraCACerts ? ["--build-arg", `NODE_EXTRA_CA_CERTS=${options.extraCACerts}`] : []),
     "--progress",
@@ -665,6 +675,7 @@ ARG NODE_EXTRA_CA_CERTS
 ARG TRIGGER_SECRET_KEY
 ARG TRIGGER_API_URL
 ARG TRIGGER_PREVIEW_BRANCH
+ARG TRIGGER_ENV_VARS
 
 ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
     TRIGGER_DEPLOYMENT_ID=\${TRIGGER_DEPLOYMENT_ID} \
@@ -675,6 +686,7 @@ ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
     TRIGGER_API_URL=\${TRIGGER_API_URL} \
     TRIGGER_PREVIEW_BRANCH=\${TRIGGER_PREVIEW_BRANCH} \
     NODE_EXTRA_CA_CERTS=\${NODE_EXTRA_CA_CERTS} \
+    TRIGGER_ENV_VARS=\${TRIGGER_ENV_VARS} \
     NODE_ENV=production
 
 ARG TARGETPLATFORM
@@ -776,6 +788,7 @@ ARG NODE_EXTRA_CA_CERTS
 ARG TRIGGER_SECRET_KEY
 ARG TRIGGER_API_URL
 ARG TRIGGER_PREVIEW_BRANCH
+ARG TRIGGER_ENV_VARS
 
 ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
     TRIGGER_DEPLOYMENT_ID=\${TRIGGER_DEPLOYMENT_ID} \
@@ -787,6 +800,7 @@ ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
     TRIGGER_PREVIEW_BRANCH=\${TRIGGER_PREVIEW_BRANCH} \
     TRIGGER_LOG_LEVEL=debug \
     NODE_EXTRA_CA_CERTS=\${NODE_EXTRA_CA_CERTS} \
+    TRIGGER_ENV_VARS=\${TRIGGER_ENV_VARS} \
     NODE_ENV=production \
     NODE_OPTIONS="--max_old_space_size=8192"
 

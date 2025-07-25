@@ -1,6 +1,6 @@
 import { intro, log, outro } from "@clack/prompts";
 import { getBranch, prepareDeploymentError, tryCatch } from "@trigger.dev/core/v3";
-import { InitializeDeploymentResponseBody } from "@trigger.dev/core/v3/schemas";
+import { InitializeDeploymentResponseBody, CreateBackgroundWorkerRequestBody } from "@trigger.dev/core/v3/schemas";
 import { Command, Option as CommandOption } from "commander";
 import { resolve, join } from "node:path";
 import { isCI } from "std-env";
@@ -443,6 +443,7 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
     authAccessToken: authorization.auth.accessToken,
     compilationPath: destination.path,
     buildEnvVars: buildManifest.build.env,
+    indexEnvVars: serverEnvVars.success ? serverEnvVars.data.variables : {},
     onLog: (logMessage) => {
       if (isCI) {
         console.log(logMessage);
@@ -492,6 +493,88 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
     );
 
     throw new SkipLoggingError("Failed to build image");
+  }
+
+  // Post-build indexing: Read index files and create background worker
+  // Note: This only works for local builds. For remote builds (Depot), the indexing
+  // still happens during the Docker build but doesn't make API calls from within the container.
+  // TODO: Consider extracting index files from remote builds or using a different approach.
+  if (isLocalBuild) {
+    const dockerExportPath = join(destination.path, "docker-export", "app");
+    const indexMetadataPath = join(dockerExportPath, "index-metadata.json");
+    const indexErrorPath = join(dockerExportPath, "index-error.json");
+    
+    logger.debug("Checking for index files", { dockerExportPath, indexMetadataPath, indexErrorPath });
+
+    // Check if there was an indexing error
+    if (await pathExists(indexErrorPath)) {
+      const indexError = await readJSONFile(indexErrorPath);
+      await failDeploy(
+        projectClient.client,
+        deployment,
+        { name: "IndexingError", message: "Failed to index deployment" },
+        buildResult.logs,
+        $spinner
+      );
+      throw new SkipLoggingError(`Indexing failed: ${JSON.stringify(indexError.error)}`);
+    }
+
+    // Read the index metadata
+    if (await pathExists(indexMetadataPath)) {
+      logger.debug("Found index-metadata.json, creating background worker");
+      const indexMetadata = await readJSONFile(indexMetadataPath);
+      
+      const backgroundWorkerBody: CreateBackgroundWorkerRequestBody = {
+        localOnly: true,
+        metadata: {
+          contentHash: indexMetadata.contentHash,
+          packageVersion: indexMetadata.packageVersion,
+          cliPackageVersion: indexMetadata.cliPackageVersion,
+          tasks: indexMetadata.tasks,
+          queues: indexMetadata.queues,
+          sourceFiles: indexMetadata.sourceFiles,
+          runtime: indexMetadata.runtime,
+          runtimeVersion: indexMetadata.runtimeVersion,
+        },
+        engine: "V2",
+        supportsLazyAttempts: true,
+        buildPlatform: indexMetadata.buildPlatform,
+        targetPlatform: indexMetadata.targetPlatform,
+      };
+
+      const createResponse = await projectClient.client.createDeploymentBackgroundWorker(
+        deployment.id,
+        backgroundWorkerBody
+      );
+
+      if (!createResponse.success) {
+        logger.error(
+          JSON.stringify({
+            message: "Failed to create background worker",
+            buildPlatform: indexMetadata.buildPlatform,
+            targetPlatform: indexMetadata.targetPlatform,
+            error: createResponse.error,
+          })
+        );
+        // Don't fail the deployment for multi-platform builds
+      } else {
+        logger.debug(
+          JSON.stringify({
+            message: "Background worker created",
+            buildPlatform: indexMetadata.buildPlatform,
+            targetPlatform: indexMetadata.targetPlatform,
+            createResponse: createResponse.data,
+          })
+        );
+      }
+    } else {
+      logger.warn("No index-metadata.json found", { path: indexMetadataPath });
+    }
+  } else {
+    // Remote builds (Depot) still perform indexing and API calls during the Docker build
+    logger.debug("Remote build detected - indexing won't happen here");
+
+    throw new Error("Remote build detected - indexing won't happen here because we're not extracting the index.json file");
   }
 
   const getDeploymentResponse = await projectClient.client.getDeployment(deployment.id);
@@ -822,6 +905,7 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
     branchName: branch,
     authAccessToken: "",
     buildEnvVars: buildManifest.build.env,
+    indexEnvVars: {}, // No server env vars in build-only mode
     network: options.network,
     builder: options.builder,
   });
@@ -833,6 +917,23 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
 
   $imageSpinner.stop("Successfully built image");
 
+  // Check for indexing results in build-only mode
+  const dockerExportPath = join(destination.path, "docker-export", "app");
+  const indexMetadataPath = join(dockerExportPath, "index-metadata.json");
+  const indexErrorPath = join(dockerExportPath, "index-error.json");
+
+  if (await pathExists(indexErrorPath)) {
+    const indexError = await readJSONFile(indexErrorPath);
+    log.error(`Indexing failed: ${JSON.stringify(indexError.error)}`);
+  }
+
+  let taskCount = 0;
+  if (await pathExists(indexMetadataPath)) {
+    const indexMetadata = await readJSONFile(indexMetadataPath);
+    taskCount = indexMetadata.tasks?.length || 0;
+    log.success(`Indexed ${taskCount} task${taskCount === 1 ? "" : "s"}`);
+  }
+
   await writeJSONFile(
     join(projectPath, ".triggerdeploy.json"),
     {
@@ -841,6 +942,7 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
       imageTag,
       imageDigest: buildResult.digest,
       runtime: buildManifest.runtime,
+      taskCount,
     },
     true
   );

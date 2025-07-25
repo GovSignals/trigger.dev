@@ -847,8 +847,9 @@ async function failDeploy(
   }
 }
 
-// WIP - UNTESTED - NEEDS TO BE FINISHED
 async function buildOnlyDeploy(projectPath: string, dir: string, options: DeployCommandOptions) {
+  intro(`Building project (build-only mode)`);
+  
   if (!options.skipUpdateCheck) {
     await updateTriggerPackages(dir, { ...options }, true, true);
   }
@@ -865,37 +866,53 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
     configFile: options.config,
   });
 
+  logger.debug("Resolved config", resolvedConfig);
+
   const gitMeta = await createGitMeta(resolvedConfig.workspaceDir);
+  logger.debug("gitMeta", gitMeta);
+  
   const branch =
     options.env === "preview" ? getBranch({ specified: options.branch, gitMeta }) : undefined;
+
+  if (options.env === "preview" && !branch) {
+    throw new Error(
+      "Didn't auto-detect preview branch, so you need to specify one. Pass --branch <branch>."
+    );
+  }
+
+  loadDotEnvVars(resolvedConfig.workingDir, options.envFile);
 
   const destination = getTmpDir(resolvedConfig.workingDir, "build", options.dryRun);
 
   const $buildSpinner = spinner();
 
   const buildManifest = await buildWorker({
-    target: "unmanaged",
+    target: "deploy",
     environment: options.env,
     branch,
     destination: destination.path,
     resolvedConfig,
     rewritePaths: true,
-    envVars: {},
+    envVars: {}, // No server env vars in build-only mode
     forcedExternals: alwaysExternal,
     listener: {
       onBundleStart() {
-        $buildSpinner.start("Building project");
+        $buildSpinner.start("Building trigger code");
       },
       onBundleComplete() {
-        $buildSpinner.stop("Successfully built project");
+        $buildSpinner.stop("Successfully built trigger code");
       },
     },
   });
 
+  logger.debug("Successfully built project to", destination.path);
+
+  // Simulate a deployment version
+  const simulatedVersion = `build-${buildManifest.contentHash.substring(0, 8)}`;
   const imageTag = `${resolvedConfig.project}:${buildManifest.contentHash.substring(0, 8)}`;
 
   const $imageSpinner = spinner();
-  $imageSpinner.start("Building image");
+  $imageSpinner.start("Building Docker image");
 
   const buildResult = await buildImage({
     isLocalBuild: true,
@@ -903,15 +920,15 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
     noCache: options.noCache,
     push: options.push,
     deploymentId: "offline",
-    deploymentVersion: "offline",
+    deploymentVersion: simulatedVersion,
     imageTag,
     load: options.load,
     contentHash: buildManifest.contentHash,
     compilationPath: destination.path,
     projectId: resolvedConfig.project,
     projectRef: resolvedConfig.project,
-    apiUrl: options.apiUrl ?? "",
-    apiKey: "",
+    apiUrl: options.apiUrl ?? "https://api.trigger.dev",
+    apiKey: "offline-build",
     branchName: branch,
     authAccessToken: "",
     buildEnvVars: buildManifest.build.env,
@@ -938,34 +955,52 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
   }
 
   let taskCount = 0;
+  let indexMetadata = null;
   if (await pathExists(indexMetadataPath)) {
-    const indexMetadata = await readJSONFile(indexMetadataPath);
+    indexMetadata = await readJSONFile(indexMetadataPath);
     taskCount = indexMetadata.tasks?.length || 0;
     log.success(`Indexed ${taskCount} task${taskCount === 1 ? "" : "s"}`);
   }
 
-  await writeJSONFile(
-    join(projectPath, ".triggerdeploy.json"),
-    {
-      environment: options.env,
+  // Save all necessary data for registerOnlyDeploy
+  const deployData = {
+    environment: options.env,
+    branch,
+    contentHash: buildManifest.contentHash,
+    imageTag,
+    imageDigest: buildResult.digest,
+    runtime: buildManifest.runtime,
+    taskCount,
+    gitMeta,
+    buildManifest: {
       contentHash: buildManifest.contentHash,
-      imageTag,
-      imageDigest: buildResult.digest,
-      runtime: buildManifest.runtime,
-      taskCount,
+      packageVersion: buildManifest.packageVersion,
+      cliPackageVersion: buildManifest.cliPackageVersion,
+      features: buildManifest.features,
+      deploy: buildManifest.deploy,
     },
-    true
-  );
+    indexMetadata,
+    simulatedVersion,
+    buildPath: destination.path,
+  };
 
-  log.message("Image built and ready for registration");
+  await writeJSONFile(join(projectPath, ".triggerdeploy.json"), deployData, true);
+
+  if (options.saveLogs) {
+    const logPath = await saveLogs(simulatedVersion, buildResult.logs);
+    console.log(`Full build logs have been saved to ${logPath}`);
+  }
+
+  log.message("Build artifacts saved");
 
   outro(
     `Image ${imageTag} built${buildResult.digest ? " and pushed" : ""}. Run \`trigger.dev deploy --register-only\` to register it.`
   );
 }
 
-// WIP - UNTESTED - NEEDS TO BE FINISHED
 async function registerOnlyDeploy(projectPath: string, dir: string, options: DeployCommandOptions) {
+  intro(`Registering deployment${options.skipPromotion ? " (without promotion)" : ""}`);
+  
   if (!options.skipUpdateCheck) {
     await updateTriggerPackages(dir, { ...options }, true, true);
   }
@@ -977,9 +1012,15 @@ async function registerOnlyDeploy(projectPath: string, dir: string, options: Dep
   });
 
   if (!authorization.ok) {
-    throw new Error(
-      `You must login first. Use the \`login\` CLI command.\n\n${authorization.error}`
-    );
+    if (authorization.error === "fetch failed") {
+      throw new Error(
+        `Failed to connect to ${authorization.auth?.apiUrl}. Are you sure it's the correct URL?`
+      );
+    } else {
+      throw new Error(
+        `You must login first. Use the \`login\` CLI command.\n\n${authorization.error}`
+      );
+    }
   }
 
   if (options.env === "production") {
@@ -994,15 +1035,58 @@ async function registerOnlyDeploy(projectPath: string, dir: string, options: Dep
     configFile: options.config,
   });
 
-  const gitMeta = await createGitMeta(resolvedConfig.workspaceDir);
-  const branch =
-    options.env === "preview" ? getBranch({ specified: options.branch, gitMeta }) : undefined;
+  const manifestPath = join(projectPath, ".triggerdeploy.json");
+  if (!(await pathExists(manifestPath))) {
+    throw new Error("No build information found. Run deploy --build-only first.");
+  }
+
+  const deployData = await readJSONFile(manifestPath);
+  
+  // Override environment if specified
+  if (options.env && options.env !== deployData.environment) {
+    logger.warn(`Overriding environment from ${deployData.environment} to ${options.env}`);
+    deployData.environment = options.env;
+  }
+
+  const gitMeta = deployData.gitMeta;
+  const branch = deployData.branch;
+
+  // Handle preview branch logic
+  if (deployData.environment === "preview" && branch) {
+    if (gitMeta?.pullRequestState === "merged" || gitMeta?.pullRequestState === "closed") {
+      log.message(`Pull request ${gitMeta?.pullRequestNumber} is ${gitMeta?.pullRequestState}.`);
+      const $buildSpinner = spinner();
+      $buildSpinner.start(`Archiving preview branch: "${branch}"`);
+      const result = await archivePreviewBranch(authorization, branch, resolvedConfig.project);
+      $buildSpinner.stop(
+        result ? `Successfully archived "${branch}"` : `Failed to archive "${branch}".`
+      );
+      return;
+    }
+
+    logger.debug("Upserting branch", { env: deployData.environment, branch });
+    const branchEnv = await upsertBranch({
+      accessToken: authorization.auth.accessToken,
+      apiUrl: authorization.auth.apiUrl,
+      projectRef: resolvedConfig.project,
+      branch,
+      gitMeta,
+    });
+
+    logger.debug("Upserted branch env", branchEnv);
+
+    log.success(`Using preview branch "${branch}"`);
+
+    if (!branchEnv) {
+      throw new Error(`Failed to create branch "${branch}"`);
+    }
+  }
 
   const projectClient = await getProjectClient({
     accessToken: authorization.auth.accessToken,
     apiUrl: authorization.auth.apiUrl,
     projectRef: resolvedConfig.project,
-    env: options.env,
+    env: deployData.environment,
     branch,
     profile: options.profile,
   });
@@ -1011,46 +1095,203 @@ async function registerOnlyDeploy(projectPath: string, dir: string, options: Dep
     throw new Error("Failed to get project client");
   }
 
-  const manifestPath = join(projectPath, ".triggerdeploy.json");
-  if (!(await pathExists(manifestPath))) {
-    throw new Error("No build information found. Run deploy --build-only first.");
-  }
-
-  const manifest = await readJSONFile(manifestPath);
-
-  const init = await projectClient.client.initializeDeployment({
-    contentHash: manifest.contentHash,
+  const deploymentResponse = await projectClient.client.initializeDeployment({
+    contentHash: deployData.contentHash,
     userId: authorization.userId,
     gitMeta,
-    type: "UNMANAGED",
-    runtime: manifest.runtime,
+    type: deployData.buildManifest.features?.run_engine_v2 ? "MANAGED" : "V1",
+    runtime: deployData.runtime,
   });
 
-  if (!init.success) {
-    throw new Error(`Failed to register deployment: ${init.error}`);
+  if (!deploymentResponse.success) {
+    throw new Error(`Failed to start deployment: ${deploymentResponse.error}`);
   }
 
-  const deployment = init.data;
+  const deployment = deploymentResponse.data;
+  const version = deployment.version;
+
+  const rawDeploymentLink = `${authorization.dashboardUrl}/projects/v3/${resolvedConfig.project}/deployments/${deployment.shortCode}`;
+  const rawTestLink = `${authorization.dashboardUrl}/projects/v3/${
+    resolvedConfig.project
+  }/test?environment=${deployData.environment === "prod" ? "prod" : "stg"}`;
+
+  const deploymentLink = cliLink("View deployment", rawDeploymentLink);
+  const testLink = cliLink("Test tasks", rawTestLink);
 
   const $spinner = spinner();
-  $spinner.start(`Registering version ${deployment.version}`);
 
-  const finalize = await projectClient.client.finalizeDeployment(
-    deployment.id,
-    { imageDigest: manifest.imageDigest, skipPromotion: options.skipPromotion },
-    (m) => $spinner.message(m)
-  );
+  // Handle environment variable syncing
+  const hasVarsToSync =
+    Object.keys(deployData.buildManifest.deploy?.sync?.env || {}).length > 0 ||
+    (branch && Object.keys(deployData.buildManifest.deploy?.sync?.parentEnv || {}).length > 0);
 
-  if (!finalize.success) {
-    $spinner.stop("Failed to finalize deployment");
-    throw new Error(finalize.error);
+  if (hasVarsToSync) {
+    const childVars = deployData.buildManifest.deploy?.sync?.env ?? {};
+    const parentVars = deployData.buildManifest.deploy?.sync?.parentEnv ?? {};
+
+    const numberOfEnvVars = Object.keys(childVars).length + Object.keys(parentVars).length;
+    const vars = numberOfEnvVars === 1 ? "var" : "vars";
+
+    if (!options.skipSyncEnvVars) {
+      $spinner.start(`Syncing ${numberOfEnvVars} env ${vars} with the server`);
+
+      const uploadResult = await syncEnvVarsWithServer(
+        projectClient.client,
+        resolvedConfig.project,
+        deployData.environment,
+        childVars,
+        parentVars
+      );
+
+      if (!uploadResult.success) {
+        await failDeploy(
+          projectClient.client,
+          deployment,
+          {
+            name: "SyncEnvVarsError",
+            message: `Failed to sync ${numberOfEnvVars} env ${vars} with the server: ${uploadResult.error}`,
+          },
+          "",
+          $spinner
+        );
+        throw new SkipLoggingError("Failed to sync environment variables");
+      } else {
+        $spinner.stop(`Successfully synced ${numberOfEnvVars} env ${vars} with the server`);
+      }
+    } else {
+      logger.log(
+        "Skipping syncing env vars. The environment variables in your project have changed, but the --skip-sync-env-vars flag was provided."
+      );
+    }
   }
 
-  $spinner.stop(`Successfully deployed version ${deployment.version}`);
+  // Create background worker if we have index metadata
+  if (deployData.indexMetadata) {
+    const backgroundWorkerBody: CreateBackgroundWorkerRequestBody = {
+      localOnly: true,
+      metadata: {
+        contentHash: deployData.indexMetadata.contentHash,
+        packageVersion: deployData.indexMetadata.packageVersion,
+        cliPackageVersion: deployData.indexMetadata.cliPackageVersion,
+        tasks: deployData.indexMetadata.tasks,
+        queues: deployData.indexMetadata.queues,
+        sourceFiles: deployData.indexMetadata.sourceFiles,
+        runtime: deployData.indexMetadata.runtime,
+        runtimeVersion: deployData.indexMetadata.runtimeVersion,
+      },
+      engine: "V2",
+      supportsLazyAttempts: true,
+      buildPlatform: deployData.indexMetadata.buildPlatform,
+      targetPlatform: deployData.indexMetadata.targetPlatform,
+    };
+
+    const createResponse = await projectClient.client.createDeploymentBackgroundWorker(
+      deployment.id,
+      backgroundWorkerBody
+    );
+
+    if (!createResponse.success) {
+      logger.error(
+        JSON.stringify({
+          message: "Failed to create background worker",
+          error: createResponse.error,
+        })
+      );
+    } else {
+      logger.debug(
+        JSON.stringify({
+          message: "Background worker created",
+          createResponse: createResponse.data,
+        })
+      );
+    }
+  }
+
+  if (isCI) {
+    log.step(`Deploying version ${version}\n`);
+  } else {
+    if (isLinksSupported) {
+      $spinner.start(`Deploying version ${version} ${deploymentLink}`);
+    } else {
+      $spinner.start(`Deploying version ${version}`);
+    }
+  }
+
+  const finalizeResponse = await projectClient.client.finalizeDeployment(
+    deployment.id,
+    {
+      imageDigest: deployData.imageDigest,
+      skipPromotion: options.skipPromotion,
+    },
+    (logMessage) => {
+      if (isCI) {
+        console.log(logMessage);
+        return;
+      }
+
+      if (isLinksSupported) {
+        $spinner.message(`Deploying version ${version} ${deploymentLink}: ${logMessage}`);
+      } else {
+        $spinner.message(`Deploying version ${version}: ${logMessage}`);
+      }
+    }
+  );
+
+  if (!finalizeResponse.success) {
+    await failDeploy(
+      projectClient.client,
+      deployment,
+      { name: "FinalizeError", message: finalizeResponse.error },
+      "",
+      $spinner
+    );
+
+    throw new SkipLoggingError("Failed to finalize deployment");
+  }
+
+  if (isCI) {
+    log.step(`Successfully deployed version ${version}`);
+  } else {
+    $spinner.stop(`Successfully deployed version ${version}`);
+  }
+
+  const taskCount = deployData.taskCount || 0;
 
   outro(
-    `Version ${deployment.version} registered${options.skipPromotion ? " without promotion" : ""}`
+    `Version ${version} deployed with ${taskCount} detected task${taskCount === 1 ? "" : "s"} ${
+      isLinksSupported ? `| ${deploymentLink} | ${testLink}` : ""
+    }`
   );
+
+  if (!isLinksSupported) {
+    console.log("View deployment");
+    console.log(rawDeploymentLink);
+    console.log(); // new line
+    console.log("Test tasks");
+    console.log(rawTestLink);
+  }
+
+  setGithubActionsOutputAndEnvVars({
+    envVars: {
+      TRIGGER_DEPLOYMENT_VERSION: version,
+      TRIGGER_VERSION: version,
+      TRIGGER_DEPLOYMENT_SHORT_CODE: deployment.shortCode,
+      TRIGGER_DEPLOYMENT_URL: `${authorization.dashboardUrl}/projects/v3/${resolvedConfig.project}/deployments/${deployment.shortCode}`,
+      TRIGGER_TEST_URL: `${authorization.dashboardUrl}/projects/v3/${
+        resolvedConfig.project
+      }/test?environment=${deployData.environment === "prod" ? "prod" : "stg"}`,
+    },
+    outputs: {
+      deploymentVersion: version,
+      workerVersion: version,
+      deploymentShortCode: deployment.shortCode,
+      deploymentUrl: `${authorization.dashboardUrl}/projects/v3/${resolvedConfig.project}/deployments/${deployment.shortCode}`,
+      testUrl: `${authorization.dashboardUrl}/projects/v3/${
+        resolvedConfig.project
+      }/test?environment=${deployData.environment === "prod" ? "prod" : "stg"}`,
+      needsPromotion: options.skipPromotion ? "true" : "false",
+    },
+  });
 }
 
 export function verifyDirectory(dir: string, projectPath: string) {

@@ -111,6 +111,14 @@ export function configureDeployCommand(program: Command) {
         )
         .option("--build-only", "Build and push the worker image without registering it")
         .option("--register-only", "Register a previously built image without building")
+        .option(
+          "--registry <registry>",
+          "Docker registry to use for build-only mode (defaults to localhost:5001)"
+        )
+        .option(
+          "--repository <repository>",
+          "Docker repository path to use for build-only mode (defaults to trigger/<project>)"
+        )
     )
       .addOption(
         new CommandOption(
@@ -148,18 +156,6 @@ export function configureDeployCommand(program: Command) {
         new CommandOption(
           "--builder <builder>",
           "The builder to use when building locally"
-        ).hideHelp()
-      )
-      .addOption(
-        new CommandOption(
-          "--registry <registry>",
-          "Docker registry to use for build-only mode (defaults to localhost:5001)"
-        ).hideHelp()
-      )
-      .addOption(
-        new CommandOption(
-          "--repository <repository>",
-          "Docker repository path to use for build-only mode (defaults to trigger/<project>)"
         ).hideHelp()
       )
       .action(async (path, options) => {

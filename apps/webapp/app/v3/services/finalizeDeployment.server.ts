@@ -30,8 +30,6 @@ export class FinalizeDeploymentService extends BaseService {
       },
     });
 
-    console.log("DEPLOYMENT", deployment);
-
     if (!deployment) {
       logger.error("Worker deployment not found", { id });
       return;

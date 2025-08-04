@@ -417,8 +417,8 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
 
   const apiUrl = normalizeApiUrlForBuild(options.apiUrl);
   const addHost = getAddHost(apiUrl);
-  const push = true;//shouldPush(options.imageTag, options.push); // TESTING
-  const load = true;//shouldLoad(options.load, push); // THIS IS NECESSARY
+  const push = shouldPush(options.imageTag, options.push);
+  const load = shouldLoad(options.load, push);
 
   await ensureQemuRegistered(options.imagePlatform);
 
@@ -1076,8 +1076,9 @@ ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
 COPY --from=build --chown=node:node /app ./
 
 # Copy the index.json file from the indexer stage if it exists
-COPY --from=indexer --chown=node:node /app/index.json* ./
-COPY --from=indexer --chown=node:node /app/index-metadata.json* ./
+COPY --from=indexer --chown=node:node /app/index.json ./
+COPY --from=indexer --chown=node:node /app/index-metadata.json ./
+# index-error.json is optional - it only exists if indexing failed
 COPY --from=indexer --chown=node:node /app/index-error.json* ./
 
 ENTRYPOINT [ "dumb-init", "node", "${options.entrypoint}" ]
@@ -1199,18 +1200,19 @@ function shouldPush(imageTag: string, push?: boolean) {
 
 // Don't load if we're pushing, unless the user explicitly wants to load
 function shouldLoad(load?: boolean, push?: boolean) {
-  switch (load) {
-    case true: {
-      return true;
-    }
-    case false: {
-      return false;
-    }
-    case undefined: {
-      return push ? false : true;
-    }
-    default: {
-      assertExhaustive(load);
-    }
-  }
+  return true; // We have to load the image for file extraction
+  // switch (load) {
+  //   case true: {
+  //     return true;
+  //   }
+  //   case false: {
+  //     return false;
+  //   }
+  //   case undefined: {
+  //     return push ? false : true;
+  //   }
+  //   default: {
+  //     assertExhaustive(load);
+  //   }
+  // }
 }

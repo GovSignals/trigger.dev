@@ -61,6 +61,8 @@ const DeployCommandOptions = CommonCommandOptions.extend({
   network: z.enum(["default", "none", "host"]).optional(),
   push: z.boolean().optional(),
   builder: z.string().default("trigger"),
+  registry: z.string().optional(),
+  repository: z.string().optional(),
   buildOnly: z.boolean().default(false),
   registerOnly: z.boolean().default(false),
 });
@@ -146,6 +148,18 @@ export function configureDeployCommand(program: Command) {
         new CommandOption(
           "--builder <builder>",
           "The builder to use when building locally"
+        ).hideHelp()
+      )
+      .addOption(
+        new CommandOption(
+          "--registry <registry>",
+          "Docker registry to use for build-only mode (defaults to localhost:5001)"
+        ).hideHelp()
+      )
+      .addOption(
+        new CommandOption(
+          "--repository <repository>",
+          "Docker repository path to use for build-only mode (defaults to trigger/<project>)"
         ).hideHelp()
       )
       .action(async (path, options) => {
@@ -870,6 +884,18 @@ async function failDeploy(
   }
 }
 
+/**
+ * Builds the project and creates a Docker image without registering it with the server.
+ * 
+ * Registry and repository can be configured via:
+ * - CLI options: --registry and --repository
+ * - Environment variables: TRIGGER_REGISTRY and TRIGGER_REPOSITORY
+ * - Defaults: localhost:5001 and trigger/<project>
+ * 
+ * Examples:
+ * - trigger.dev deploy --build-only --registry registry.example.com --repository myorg/myproject
+ * - TRIGGER_REGISTRY=gcr.io TRIGGER_REPOSITORY=myproject/trigger trigger.dev deploy --build-only
+ */
 async function buildOnlyDeploy(projectPath: string, dir: string, options: DeployCommandOptions) {
   intro(`Building project (build-only mode)`);
   
@@ -932,13 +958,17 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
 
   logger.info("Project is", resolvedConfig.project);
 
+  // Resolve registry and repository from options, env vars, or defaults
+  const registry = options.registry ?? envVars.TRIGGER_REGISTRY ?? "localhost:5001";
+  const repository = options.repository ?? envVars.TRIGGER_REPOSITORY ?? `trigger/${resolvedConfig.project}`;
+
   // Simulate a deployment version
   const simulatedVersion = `build-${buildManifest.contentHash.substring(0, 8)}`;
   
-  // Construct imageTag with registry - always use localhost:5001 for build-only mode
-  // In build-only mode, we don't have the server's registry info
-  // This means build-only mode only works with local registries, not cloud registries
-  const imageTag = `localhost:5001/trigger/${resolvedConfig.project}:${buildManifest.contentHash.substring(0, 8)}`;
+  // Construct imageTag with configurable registry and repository
+  const imageTag = `${registry}/${repository}:${buildManifest.contentHash.substring(0, 8)}`;
+
+  logger.debug("Using registry", { registry, repository, imageTag });
 
   const $imageSpinner = spinner();
   $imageSpinner.start("Building Docker image");

@@ -46,6 +46,9 @@ export class KubernetesWorkloadManager implements WorkloadManager {
               "app.kubernetes.io/part-of": "trigger-worker",
               "app.kubernetes.io/component": "create",
             },
+            annotations: {
+              "com.palantir.rubix.service/pod-cert": "{}",
+            },
           },
           spec: {
             ...this.#defaultPodSpec,
@@ -60,6 +63,14 @@ export class KubernetesWorkloadManager implements WorkloadManager {
                   },
                 ],
                 resources: this.#getResourcesForMachine(opts.machine),
+                securityContext: {
+                  runAsNonRoot: true,
+                  runAsUser: 1000,
+                  allowPrivilegeEscalation: false,
+                  capabilities: {
+                    drop: ["ALL"],
+                  },
+                },
                 env: [
                   {
                     name: "TRIGGER_DEQUEUED_AT_MS",
@@ -228,6 +239,11 @@ export class KubernetesWorkloadManager implements WorkloadManager {
       restartPolicy: "Never",
       automountServiceAccountToken: false,
       imagePullSecrets: this.getImagePullSecrets(),
+      securityContext: {
+        runAsNonRoot: true,
+        runAsUser: 1000,
+        fsGroup: 1000,
+      },
       ...(env.KUBERNETES_WORKER_NODETYPE_LABEL
         ? {
             nodeSelector: {

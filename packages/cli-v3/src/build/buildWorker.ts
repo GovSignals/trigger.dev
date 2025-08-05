@@ -34,6 +34,7 @@ export type BuildWorkerOptions = {
   envVars?: Record<string, string>;
   rewritePaths?: boolean;
   forcedExternals?: string[];
+  baseImageNode?: string;
 };
 
 export async function buildWorker(options: BuildWorkerOptions) {
@@ -93,6 +94,7 @@ export async function buildWorker(options: BuildWorkerOptions) {
       resolvedConfig,
       outputPath: options.destination,
       bundleResult,
+      baseImageNode: options.baseImageNode,
     });
   }
 
@@ -152,11 +154,13 @@ async function writeDeployFiles({
   resolvedConfig,
   outputPath,
   bundleResult,
+  baseImageNode,
 }: {
   buildManifest: BuildManifest;
   resolvedConfig: ResolvedConfig;
   outputPath: string;
   bundleResult: BundleResult;
+  baseImageNode?: string;
 }) {
   // Step 1. Read the package.json file
   const packageJson = await readProjectPackageJson(resolvedConfig.packageJsonPath);
@@ -190,7 +194,7 @@ async function writeDeployFiles({
 
   await writeJSONFile(join(outputPath, "build.json"), buildManifestToJSON(buildManifest));
   await writeJSONFile(join(outputPath, "metafile.json"), bundleResult.metafile);
-  await writeContainerfile(outputPath, buildManifest);
+  await writeContainerfile(outputPath, buildManifest, baseImageNode);
 }
 
 async function readProjectPackageJson(packageJsonPath: string) {
@@ -199,7 +203,7 @@ async function readProjectPackageJson(packageJsonPath: string) {
   return packageJson;
 }
 
-async function writeContainerfile(outputPath: string, buildManifest: BuildManifest) {
+async function writeContainerfile(outputPath: string, buildManifest: BuildManifest, baseImageNode?: string) {
   if (!buildManifest.runControllerEntryPoint || !buildManifest.indexControllerEntryPoint) {
     throw new Error("Something went wrong with the build. Aborting deployment. [code 7789]");
   }
@@ -210,6 +214,7 @@ async function writeContainerfile(outputPath: string, buildManifest: BuildManife
     build: buildManifest.build,
     image: buildManifest.image,
     indexScript: buildManifest.indexControllerEntryPoint,
+    baseImageNode,
   });
 
   const containerfilePath = join(outputPath, "Containerfile");

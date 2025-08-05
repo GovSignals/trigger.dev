@@ -65,6 +65,7 @@ const DeployCommandOptions = CommonCommandOptions.extend({
   repository: z.string().optional(),
   buildOnly: z.boolean().default(false),
   registerOnly: z.boolean().default(false),
+  baseImageNode: z.string().optional(),
 });
 
 type DeployCommandOptions = z.infer<typeof DeployCommandOptions>;
@@ -118,6 +119,10 @@ export function configureDeployCommand(program: Command) {
         .option(
           "--repository <repository>",
           "Docker repository path to use for build-only mode (defaults to trigger/<project>)"
+        )
+        .option(
+          "--base-image-node <image>",
+          "Custom base image for Node.js runtime (e.g., my-registry/node:21-slim)"
         )
     )
       .addOption(
@@ -313,6 +318,7 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
       rewritePaths: true,
       envVars: serverEnvVars.success ? serverEnvVars.data.variables : {},
       forcedExternals,
+      baseImageNode: options.baseImageNode,
       listener: {
         onBundleStart() {
           $buildSpinner.start("Building trigger code");
@@ -940,6 +946,7 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
     rewritePaths: true,
     envVars: {}, // No server env vars in build-only mode
     forcedExternals: alwaysExternal,
+    baseImageNode: options.baseImageNode,
     listener: {
       onBundleStart() {
         $buildSpinner.start("Building trigger code");

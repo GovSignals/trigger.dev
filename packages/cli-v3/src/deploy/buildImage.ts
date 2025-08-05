@@ -3,12 +3,14 @@ import { depot } from "@depot/cli";
 import { x } from "tinyexec";
 import { BuildManifest, BuildRuntime } from "@trigger.dev/core/v3/schemas";
 import { networkInterfaces } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
 import { safeReadJSONFile } from "../utilities/fileSystem.js";
 import { cpSync, mkdirSync, readFileSync, statSync } from "fs";
 import { isLinux } from "std-env";
 import { z } from "zod";
 import { assertExhaustive } from "../utilities/assertExhaustive.js";
+import { pathToFileURL } from "url";
+import type { ContainerfileTemplate } from "./containerfile-template.js";
 
 export interface BuildImageOptions {
   // Common options
@@ -816,6 +818,7 @@ export type GenerateContainerfileOptions = {
   indexScript: string;
   entrypoint: string;
   baseImageNode?: string;
+  containerfileModule?: string;
 };
 
 const BASE_IMAGE: Record<BuildRuntime, string> = {
@@ -827,19 +830,7 @@ const BASE_IMAGE: Record<BuildRuntime, string> = {
 
 const DEFAULT_PACKAGES = ["busybox", "ca-certificates", "dumb-init", "git", "openssl"];
 
-export async function generateContainerfile(options: GenerateContainerfileOptions) {
-  switch (options.runtime) {
-    case "node":
-    case "node-22": {
-      return await generateNodeContainerfile(options);
-    }
-    case "bun": {
-      return await generateBunContainerfile(options);
-    }
-  }
-}
-
-const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
+export const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
   const buildArgs = Object.entries(options.build.env || {})
     .flatMap(([key]) => `ARG ${key}`)
     .join("\n");
@@ -871,7 +862,56 @@ const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
   };
 };
 
-async function generateBunContainerfile(options: GenerateContainerfileOptions) {
+async function loadContainerfileModule(modulePath: string): Promise<ContainerfileTemplate> {
+  const absolutePath = resolve(modulePath);
+  
+  try {
+    // Convert to file URL for proper ESM import
+    const moduleUrl = pathToFileURL(absolutePath).href;
+    
+    // Dynamic import of the module
+    const module = await import(moduleUrl);
+    
+    // Return the default export
+    if (!module.default) {
+      throw new Error(`Module ${modulePath} does not have a default export`);
+    }
+    
+    return module.default;
+  } catch (error) {
+    logger.error(`Failed to load containerfile module from ${modulePath}`, error);
+    throw new Error(`Failed to load containerfile module: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export async function generateContainerfile(options: GenerateContainerfileOptions) {
+  // If a custom module is specified, use it
+  if (options.containerfileModule) {
+    try {
+      const template = await loadContainerfileModule(options.containerfileModule);
+      
+      // Pass the full options directly to the template for complete control
+      const containerfile = await template.generate(options);
+      return containerfile;
+    } catch (error) {
+      logger.error("Failed to generate containerfile from module", error);
+      throw error;
+    }
+  }
+  
+  // Fall back to built-in templates
+  switch (options.runtime) {
+    case "node":
+    case "node-22": {
+      return await generateNodeContainerfile(options);
+    }
+    case "bun": {
+      return await generateBunContainerfile(options);
+    }
+  }
+}
+
+export async function generateBunContainerfile(options: GenerateContainerfileOptions) {
   const { baseImage, buildArgs, buildEnvVars, postInstallCommands, baseInstructions, packages } =
     parseGenerateOptions(options);
 
@@ -978,7 +1018,7 @@ CMD []
   `;
 }
 
-async function generateNodeContainerfile(options: GenerateContainerfileOptions) {
+export async function generateNodeContainerfile(options: GenerateContainerfileOptions) {
   const { baseImage, buildArgs, buildEnvVars, postInstallCommands, baseInstructions, packages } =
     parseGenerateOptions(options);
 

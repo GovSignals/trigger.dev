@@ -66,6 +66,7 @@ const DeployCommandOptions = CommonCommandOptions.extend({
   buildOnly: z.boolean().default(false),
   registerOnly: z.boolean().default(false),
   baseImageNode: z.string().optional(),
+  containerfileModule: z.string().optional(),
 });
 
 type DeployCommandOptions = z.infer<typeof DeployCommandOptions>;
@@ -123,6 +124,10 @@ export function configureDeployCommand(program: Command) {
         .option(
           "--base-image-node <image>",
           "Custom base image for Node.js runtime (e.g., my-registry/node:21-slim)"
+        )
+        .option(
+          "--containerfile-module <module>",
+          "Path to a JavaScript/TypeScript module that exports a containerfile template"
         )
     )
       .addOption(
@@ -319,6 +324,7 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
       envVars: serverEnvVars.success ? serverEnvVars.data.variables : {},
       forcedExternals,
       baseImageNode: options.baseImageNode,
+      containerfileModule: options.containerfileModule,
       listener: {
         onBundleStart() {
           $buildSpinner.start("Building trigger code");
@@ -947,6 +953,7 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
     envVars: {}, // No server env vars in build-only mode
     forcedExternals: alwaysExternal,
     baseImageNode: options.baseImageNode,
+    containerfileModule: options.containerfileModule,
     listener: {
       onBundleStart() {
         $buildSpinner.start("Building trigger code");

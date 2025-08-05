@@ -67,6 +67,7 @@ const DeployCommandOptions = CommonCommandOptions.extend({
   registerOnly: z.boolean().default(false),
   baseImageNode: z.string().optional(),
   containerfileModule: z.string().optional(),
+  skipDigest: z.boolean().default(false),
 });
 
 type DeployCommandOptions = z.infer<typeof DeployCommandOptions>;
@@ -128,6 +129,10 @@ export function configureDeployCommand(program: Command) {
         .option(
           "--containerfile-module <module>",
           "Path to a JavaScript/TypeScript module that exports a containerfile template"
+        )
+        .option(
+          "--skip-digest",
+          "Skip sending the image digest when registering (for register-only mode)"
         )
     )
       .addOption(
@@ -1335,7 +1340,7 @@ async function registerOnlyDeploy(projectPath: string, dir: string, options: Dep
   const finalizeResponse = await projectClient.client.finalizeDeployment(
     deployment.id,
     {
-      imageDigest: deployData.imageDigest,
+      ...(options.skipDigest ? {} : { imageDigest: deployData.imageDigest }),
       skipPromotion: options.skipPromotion,
     },
     (logMessage) => {

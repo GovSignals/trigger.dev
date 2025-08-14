@@ -237,8 +237,13 @@ export class KubernetesWorkloadManager implements WorkloadManager {
   get #defaultPodSpec(): Omit<k8s.V1PodSpec, "containers"> {
     return {
       restartPolicy: "Never",
-      automountServiceAccountToken: false,
+      // Explicit control over service account token mounting (defaults to false for security)
+      automountServiceAccountToken: env.KUBERNETES_WORKER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN,
       imagePullSecrets: this.getImagePullSecrets(),
+      // Optionally specify a service account for the worker pods
+      ...(env.KUBERNETES_WORKER_SERVICE_ACCOUNT
+        ? { serviceAccountName: env.KUBERNETES_WORKER_SERVICE_ACCOUNT }
+        : {}),
       securityContext: {
         runAsNonRoot: true,
         runAsUser: 1000,

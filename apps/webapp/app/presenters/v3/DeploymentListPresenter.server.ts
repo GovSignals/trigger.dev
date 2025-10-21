@@ -137,7 +137,8 @@ WHERE
   wd."projectId" = ${project.id}
   AND wd."environmentId" = ${environment.id}
 ORDER BY
-  string_to_array(wd."version", '.')::int[] DESC
+  string_to_array(split_part(wd."version", '-', 1), '.')::int[] DESC,
+  split_part(wd."version", '-', 2) DESC
 LIMIT ${pageSize} OFFSET ${pageSize * (page - 1)};`;
 
     return {
@@ -224,7 +225,13 @@ LIMIT ${pageSize} OFFSET ${pageSize * (page - 1)};`;
       FROM ${sqlDatabaseSchema}."WorkerDeployment"
       WHERE "projectId" = ${project.id}
         AND "environmentId" = ${environment.id}
-        AND string_to_array(version, '.')::int[] > string_to_array(${version}, '.')::int[]
+        AND (
+          string_to_array(split_part(version, '-', 1), '.')::int[] > string_to_array(split_part(${version}, '-', 1), '.')::int[]
+          OR (
+            string_to_array(split_part(version, '-', 1), '.')::int[] = string_to_array(split_part(${version}, '-', 1), '.')::int[]
+            AND split_part(version, '-', 2) > split_part(${version}, '-', 2)
+          )
+        )
     `;
 
     const count = Number(deploymentsSinceVersion[0].count);

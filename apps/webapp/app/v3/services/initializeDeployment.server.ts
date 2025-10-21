@@ -45,7 +45,7 @@ export class InitializeDeploymentService extends BaseService {
         take: 1,
       });
 
-      const nextVersion = calculateNextBuildVersion(latestDeployment?.version);
+      const nextVersion = calculateNextBuildVersion(latestDeployment?.version, env.DEPLOY_VERSION_SUFFIX);
 
       if (payload.selfHosted && remoteBuildsEnabled()) {
         throw new ServiceValidationError(

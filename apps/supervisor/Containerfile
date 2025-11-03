@@ -23,6 +23,9 @@ FROM base AS deps-fetcher
 USER root
 RUN apk add --no-cache build-base python3-dev py3-setuptools make
 
+# Copy patches directory to ensure they're available for patched dependencies
+COPY --chown=node:node patches/ ./patches/
+
 FROM deps-fetcher AS dev-deps
 ENV NODE_ENV development
 

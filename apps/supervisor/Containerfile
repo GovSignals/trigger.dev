@@ -29,8 +29,8 @@ COPY --chown=node:node patches/ ./patches/
 FROM deps-fetcher AS dev-deps
 ENV NODE_ENV development
 
-# Allow lockfile updates for CVE overrides while keeping it mostly frozen
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --ignore-scripts || pnpm install --no-frozen-lockfile --ignore-scripts
+# Force reinstall to handle lockfile mismatches from CVE overrides
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store rm pnpm-lock.yaml && pnpm install --ignore-scripts
 
 FROM base AS builder
 

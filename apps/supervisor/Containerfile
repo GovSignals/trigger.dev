@@ -14,7 +14,8 @@ RUN apk add --no-cache dumb-init
 
 COPY --chown=node:node .gitignore .gitignore
 COPY --from=pruner --chown=node:node /app/out/json/ .
-COPY --from=pruner --chown=node:node /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
+# Use full lockfile instead of pruned to preserve patch information
+COPY --chown=node:node pnpm-lock.yaml ./pnpm-lock.yaml
 COPY --from=pruner --chown=node:node /app/out/pnpm-workspace.yaml ./pnpm-workspace.yaml
 
 RUN corepack enable && corepack prepare --activate
@@ -29,8 +30,8 @@ COPY --chown=node:node patches/ ./patches/
 FROM deps-fetcher AS dev-deps
 ENV NODE_ENV development
 
-# Force reinstall to handle lockfile mismatches from CVE overrides
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store rm pnpm-lock.yaml && pnpm install --ignore-scripts
+# Install with full lockfile to preserve patches and CVE overrides
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --ignore-scripts
 
 FROM base AS builder
 

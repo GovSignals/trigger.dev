@@ -12,7 +12,7 @@ function hash(data: Uint8Array, outputLength = 32, type = "sha256"): Uint8Array 
 }
 
 export function jumpHash(key: string, buckets: number): number {
-  return jumpConsistentHash(hash(Buffer.from(key)), buckets);
+  return jumpConsistentHash(hash(new Uint8Array(Buffer.from(key))), buckets);
 }
 
 /**

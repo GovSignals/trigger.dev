@@ -30,7 +30,7 @@ FROM deps-fetcher AS dev-deps
 ENV NODE_ENV development
 
 # TEMP --no-frozen-lockfile and remove --offline for overrides for CVEs  
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --no-frozen-lockfile --fix-lockfile
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --no-frozen-lockfile
 
 FROM base AS builder
 

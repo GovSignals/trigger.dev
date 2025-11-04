@@ -14,8 +14,9 @@ RUN apk add --no-cache dumb-init
 
 COPY --chown=node:node .gitignore .gitignore
 COPY --from=pruner --chown=node:node /app/out/json/ .
-# Use full lockfile instead of pruned to preserve patch information
+# Use full lockfile and root package.json to preserve patch information
 COPY --chown=node:node pnpm-lock.yaml ./pnpm-lock.yaml
+COPY --chown=node:node package.json ./package.json
 COPY --from=pruner --chown=node:node /app/out/pnpm-workspace.yaml ./pnpm-workspace.yaml
 
 RUN corepack enable && corepack prepare --activate

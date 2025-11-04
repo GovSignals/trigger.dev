@@ -31,8 +31,8 @@ FROM deps-fetcher AS dev-deps
 ENV NODE_ENV development
 
 # Install with full lockfile to preserve patches and CVE overrides
-# Skip integrity checks due to FIPS mode OpenSSL restrictions
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm config set strict-ssl false && pnpm install --ignore-scripts --no-verify-store-integrity
+# Use legacy OpenSSL provider for pnpm install (pnpm uses non-FIPS hash algorithms)
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store NODE_OPTIONS=--openssl-legacy-provider pnpm install --ignore-scripts
 
 FROM base AS builder
 

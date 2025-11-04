@@ -1,5 +1,4 @@
 import { customAlphabet } from "nanoid";
-// @ts-expect-error - @bugsnag/cuid has types but they're not properly exported
 import cuid from "@bugsnag/cuid";
 
 const idGenerator = customAlphabet("123456789abcdefghijkmnopqrstuvwxyz", 21);

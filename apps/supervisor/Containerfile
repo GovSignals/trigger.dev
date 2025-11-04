@@ -31,7 +31,8 @@ FROM deps-fetcher AS dev-deps
 ENV NODE_ENV development
 
 # Install with full lockfile to preserve patches and CVE overrides
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --ignore-scripts
+# Use frozen lockfile to ensure patches are applied
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile --ignore-scripts
 
 FROM base AS builder
 

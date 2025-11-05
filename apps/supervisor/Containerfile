@@ -47,15 +47,8 @@ COPY --chown=node:node package.json ./package.json
 COPY --chown=node:node patches/ ./patches/
 
 RUN pnpm run generate && \
-  pnpm run --filter supervisor... build
-
-# Copy built application and existing node_modules (which have correct tar-fs@3.1.1)
-RUN mkdir -p /prod/supervisor && \
-  cp -r apps/supervisor/dist /prod/supervisor/ && \
-  cp apps/supervisor/package.json /prod/supervisor/ && \
-  cp -r node_modules /prod/supervisor/node_modules && \
-  cp pnpm-lock.yaml /prod/supervisor/ && \
-  cp package.json /prod/supervisor/root-package.json
+  pnpm run --filter supervisor... build && \
+  pnpm deploy --filter=supervisor --prod /prod/supervisor
 
 FROM base AS runner
 

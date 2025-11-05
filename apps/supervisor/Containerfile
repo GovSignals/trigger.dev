@@ -50,15 +50,14 @@ RUN pnpm run generate && \
   pnpm run --filter supervisor... build && \
   pnpm deploy --filter=supervisor --prod /prod/supervisor && \
   echo "=== Replacing vulnerable packages with fixed versions ===" && \
-  echo "--- Removing ALL tar-fs@2* versions ---" && \
-  find /prod/supervisor/node_modules -type d -name "tar-fs@2*" -exec rm -rf {} + 2>/dev/null || true && \
-  echo "--- Copying fixed tar-fs@3.1.1 and dependencies ---" && \
+  echo "--- Directly removing tar-fs@2.1.3 ---" && \
+  rm -rf /prod/supervisor/node_modules/.pnpm/tar-fs@2.1.3 && \
+  echo "--- Copying fixed tar-fs@3.1.1 ---" && \
   cp -r node_modules/.pnpm/tar-fs@3.1.1 /prod/supervisor/node_modules/.pnpm/ && \
   cp -r node_modules/.pnpm/tar-stream@3.1.7 /prod/supervisor/node_modules/.pnpm/ 2>/dev/null || true && \
-  echo "--- Removing vulnerable cross-spawn@7.0.3 ---" && \
-  find /prod/supervisor/node_modules -type d -name "cross-spawn@7.0.3" -exec rm -rf {} + 2>/dev/null || true && \
-  echo "--- Copying fixed cross-spawn@7.0.5 ---" && \
-  cp -r node_modules/.pnpm/cross-spawn@7.0.5 /prod/supervisor/node_modules/.pnpm/ && \
+  echo "--- Directly removing cross-spawn@7.0.3 ---" && \
+  rm -rf /prod/supervisor/node_modules/.pnpm/cross-spawn@7.0.3 && \
+  echo "--- Copying fixed cross-spawn@7.0.5 (already done) ---" && \
   echo "=== Package replacement complete ==="
 
 FROM base AS runner

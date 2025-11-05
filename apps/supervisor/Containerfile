@@ -49,10 +49,17 @@ COPY --chown=node:node patches/ ./patches/
 RUN pnpm run generate && \
   pnpm run --filter supervisor... build && \
   pnpm deploy --filter=supervisor --prod /prod/supervisor && \
-  rm -rf /prod/supervisor/node_modules/.pnpm/tar-fs@2* && \
-  cp -r node_modules/.pnpm/tar-fs@3.1.1 /prod/supervisor/node_modules/.pnpm/ 2>/dev/null || true && \
-  rm -rf /prod/supervisor/node_modules/.pnpm/cross-spawn@7.0.3 && \
-  cp -r node_modules/.pnpm/cross-spawn@7.0.5 /prod/supervisor/node_modules/.pnpm/ 2>/dev/null || true
+  echo "=== Replacing vulnerable packages with fixed versions ===" && \
+  ls -la node_modules/.pnpm/ | grep -E "tar-fs@|cross-spawn@" && \
+  echo "--- Removing vulnerable tar-fs@2.1.3 ---" && \
+  find /prod/supervisor/node_modules/.pnpm -name "tar-fs@2.1.3" -type d -exec rm -rf {} + 2>/dev/null || true && \
+  echo "--- Copying fixed tar-fs@3.1.1 ---" && \
+  find node_modules/.pnpm -name "tar-fs@3.1.1" -type d -exec cp -r {} /prod/supervisor/node_modules/.pnpm/ \; && \
+  echo "--- Removing vulnerable cross-spawn@7.0.3 ---" && \
+  find /prod/supervisor/node_modules/.pnpm -name "cross-spawn@7.0.3" -type d -exec rm -rf {} + 2>/dev/null || true && \
+  echo "--- Copying fixed cross-spawn@7.0.5 ---" && \
+  find node_modules/.pnpm -name "cross-spawn@7.0.5" -type d -exec cp -r {} /prod/supervisor/node_modules/.pnpm/ \; && \
+  echo "=== Package replacement complete ==="
 
 FROM base AS runner
 

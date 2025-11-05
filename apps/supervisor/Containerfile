@@ -48,17 +48,15 @@ COPY --chown=node:node patches/ ./patches/
 
 RUN pnpm run generate && \
   pnpm run --filter supervisor... build && \
-  pnpm deploy --filter=supervisor --prod /prod/supervisor && \
-  echo "=== Replacing vulnerable packages with fixed versions ===" && \
-  echo "--- Directly removing tar-fs@2.1.3 ---" && \
+  pnpm deploy --filter=supervisor --prod /prod/supervisor
+
+# Replace vulnerable packages - Build: 2025-11-05
+RUN echo "=== Replacing vulnerable packages ===" && \
   rm -rf /prod/supervisor/node_modules/.pnpm/tar-fs@2.1.3 && \
-  echo "--- Copying fixed tar-fs@3.1.1 ---" && \
   cp -r node_modules/.pnpm/tar-fs@3.1.1 /prod/supervisor/node_modules/.pnpm/ && \
   cp -r node_modules/.pnpm/tar-stream@3.1.7 /prod/supervisor/node_modules/.pnpm/ 2>/dev/null || true && \
-  echo "--- Directly removing cross-spawn@7.0.3 ---" && \
-  rm -rf /prod/supervisor/node_modules/.pnpm/cross-spawn@7.0.3 && \
-  echo "--- Copying fixed cross-spawn@7.0.5 (already done) ---" && \
-  echo "=== Package replacement complete ==="
+  ls -la /prod/supervisor/node_modules/.pnpm/ | grep tar-fs && \
+  echo "=== Replacement complete ==="
 
 FROM base AS runner
 

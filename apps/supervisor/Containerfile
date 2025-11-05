@@ -50,12 +50,17 @@ RUN pnpm run generate && \
   pnpm run --filter supervisor... build && \
   pnpm deploy --filter=supervisor --prod /prod/supervisor
 
-# Replace vulnerable packages - Build: 2025-11-05
+# Replace vulnerable packages and fix symlinks - Build: 2025-11-05
 RUN echo "=== Replacing vulnerable packages ===" && \
   rm -rf /prod/supervisor/node_modules/.pnpm/tar-fs@2.1.3 && \
+  rm -rf /prod/supervisor/node_modules/.pnpm/cross-spawn@7.0.3 && \
   cp -r node_modules/.pnpm/tar-fs@3.1.1 /prod/supervisor/node_modules/.pnpm/ && \
   cp -r node_modules/.pnpm/tar-stream@3.1.7 /prod/supervisor/node_modules/.pnpm/ 2>/dev/null || true && \
-  ls -la /prod/supervisor/node_modules/.pnpm/ | grep tar-fs && \
+  echo "--- Fixing symlinks to use updated packages ---" && \
+  find /prod/supervisor/node_modules -type l -lname "*tar-fs@2.1.3*" -delete && \
+  find /prod/supervisor/node_modules -type l -lname "*cross-spawn@7.0.3*" -delete && \
+  cd /prod/supervisor && \
+  find node_modules -name "dockerode" -type d -exec sh -c 'cd {} && if [ -f package.json ]; then ln -sf ../../.pnpm/tar-fs@3.1.1/node_modules/tar-fs node_modules/tar-fs 2>/dev/null || true; fi' \; && \
   echo "=== Replacement complete ==="
 
 FROM base AS runner

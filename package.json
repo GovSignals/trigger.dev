@@ -94,6 +94,7 @@
       "ws": "8.17.1",
       "semver": "5.7.2",
       "cross-spawn": "7.0.5",
+      "vite": "4.5.2",
       "@babel/runtime": "7.27.0"
     }
   }

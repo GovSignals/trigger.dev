@@ -15,6 +15,7 @@ overrides:
   semver: 5.7.2
   cross-spawn: 7.0.5
   vite: 4.5.2
+  tmp: 0.2.4
   '@babel/runtime': 7.27.0
 
 patchedDependencies:
@@ -15651,10 +15652,6 @@ packages:
     resolution: {integrity: sha512-Ux1J4NUqC6tZayBqLN1kUlDAEvLiQlli/53sSddU4IN+h+3xxnv2HmRSMpVSvr1hvJzotfMs3ERvETGK+f4OwA==}
     engines: {node: '>= 4.0'}
 
-  os-tmpdir@1.0.2:
-    resolution: {integrity: sha512-D2FR03Vir7FIu45XBY20mTb+/ZSWB00sjU9jdQXt83gDrI4Ztz5Fs7/yy74g2N5SVQY4xY1qDr4rNddwYRVX0g==}
-    engines: {node: '>=0.10.0'}
-
   outdent@0.5.0:
     resolution: {integrity: sha512-/jHxFIzoMXdqPzTaCpFzAAWhpkSjZPF4Vsn6jAfNpmbH/ymsmd7Qc6VE9BGn0L6YMj6uwpQLxCECpus4ukKS9Q==}
 
@@ -18098,16 +18095,8 @@ packages:
   tmp-promise@3.0.3:
     resolution: {integrity: sha512-RwM7MoPojPxsOBYnyd2hy0bxtIlVrihNs9pj5SUvY8Zz1sQcQG2tG1hSr8PDxfgEB8RNKDhqbIlroIarSNDNsQ==}
 
-  tmp@0.0.33:
-    resolution: {integrity: sha512-jRCJlojKnZ3addtTOjdIqoRuPEKBvNXcGYqzO6zWZX8KfKEpnGY5jfggJQ3EjKuu8D4bJRr0y+cYJFmYbImXGw==}
-    engines: {node: '>=0.6.0'}
-
-  tmp@0.2.1:
-    resolution: {integrity: sha512-76SUhtfqR2Ijn+xllcI5P1oyannHNHByD80W1q447gU3mp9G9PSpGdWmjUOHRDPiHYacIk66W7ubDTuPF3BEtQ==}
-    engines: {node: '>=8.17.0'}
-
-  tmp@0.2.3:
-    resolution: {integrity: sha512-nZD7m9iCPC5g0pYmcaxogYKggSfLsdxl8of3Q/oIbqCqLLIO9IAF0GWjX1z9NZRHPiXv8Wex4yDCaZsgEw0Y8w==}
+  tmp@0.2.4:
+    resolution: {integrity: sha512-UdiSoX6ypifLmrfQ/XfiawN6hkjSBpCjhKxxZcWlUUmoXLaCKQU0bx4HF/tdDK2uzRuchf1txGvrWBzYREssoQ==}
     engines: {node: '>=14.14'}
 
   to-fast-properties@2.0.0:
@@ -24130,7 +24119,7 @@ snapshots:
       temp-dir: 2.0.0
       tempy: 1.0.1
       terminal-link: 2.1.1
-      tmp: 0.2.1
+      tmp: 0.2.4
       ts-pattern: 4.3.0
     transitivePeerDependencies:
       - encoding
@@ -32927,7 +32916,7 @@ snapshots:
     dependencies:
       chardet: 0.7.0
       iconv-lite: 0.4.24
-      tmp: 0.0.33
+      tmp: 0.2.4
 
   extract-zip@2.0.1:
     dependencies:
@@ -36182,8 +36171,6 @@ snapshots:
     optionalDependencies:
       fsevents: 2.3.3
 
-  os-tmpdir@1.0.2: {}
-
   outdent@0.5.0: {}
 
   outdent@0.8.0: {}
@@ -39244,7 +39231,7 @@ snapshots:
       properties-reader: 2.3.0
       ssh-remote-port-forward: 1.0.4
       tar-fs: 3.0.9
-      tmp: 0.2.3
+      tmp: 0.2.4
       undici: 5.29.0
     transitivePeerDependencies:
       - bare-buffer
@@ -39339,17 +39326,9 @@ snapshots:
 
   tmp-promise@3.0.3:
     dependencies:
-      tmp: 0.2.3
+      tmp: 0.2.4
 
-  tmp@0.0.33:
-    dependencies:
-      os-tmpdir: 1.0.2
-
-  tmp@0.2.1:
-    dependencies:
-      rimraf: 3.0.2
-
-  tmp@0.2.3: {}
+  tmp@0.2.4: {}
 
   to-fast-properties@2.0.0: {}
 

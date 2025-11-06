@@ -17,7 +17,10 @@ RUN apt-get update && apt-get install -y openssl dumb-init
 WORKDIR /triggerdotdev
 COPY --chown=node:node .gitignore .gitignore
 COPY --from=pruner --chown=node:node /triggerdotdev/out/json/ .
-COPY --from=pruner --chown=node:node /triggerdotdev/out/pnpm-lock.yaml ./pnpm-lock.yaml
+# Use full lockfile instead of pruned to preserve CVE override patches
+COPY --chown=node:node pnpm-lock.yaml ./pnpm-lock.yaml
+COPY --chown=node:node package.json ./package.json
+COPY --chown=node:node patches/ ./patches/
 COPY --from=pruner --chown=node:node /triggerdotdev/out/pnpm-workspace.yaml ./pnpm-workspace.yaml
 
 ## Dev deps
@@ -26,7 +29,7 @@ WORKDIR /triggerdotdev
 # Corepack is used to install pnpm
 RUN corepack enable
 ENV NODE_ENV development
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --ignore-scripts --no-frozen-lockfile
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --ignore-scripts --frozen-lockfile
 
 ## Production deps
 FROM base AS production-deps
@@ -34,7 +37,7 @@ WORKDIR /triggerdotdev
 # Corepack is used to install pnpm
 RUN corepack enable
 ENV NODE_ENV production
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --prod --no-frozen-lockfile
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --prod --frozen-lockfile
 COPY --from=pruner --chown=node:node /triggerdotdev/internal-packages/database/prisma/schema.prisma /triggerdotdev/internal-packages/database/prisma/schema.prisma
 # RUN pnpm add @prisma/client@5.1.1 -w
 ENV NPM_CONFIG_IGNORE_WORKSPACE_ROOT_CHECK true
@@ -100,5 +103,11 @@ USER node
 
 # Ensure pnpm is installed during build and not silently downloaded at runtime (node user)
 RUN corepack prepare --activate
+
+# Remove Node caches containing vulnerable dependencies (not needed at runtime)
+USER root
+RUN rm -rf /root/.cache/node /home/node/.cache/node 2>/dev/null || true
+
+USER node
 
 CMD ["./scripts/entrypoint.sh"]

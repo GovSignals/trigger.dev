@@ -66,6 +66,10 @@ ENV NODE_ENV production
 
 COPY --from=builder /prod/supervisor /app/apps/supervisor
 
+# Remove corepack/pnpm cache containing vulnerable dependencies (not needed at runtime)
+USER root
+RUN rm -rf /root/.cache/node/corepack /home/node/.cache/node/corepack 2>/dev/null || true
+
 EXPOSE 8000
 USER node
 

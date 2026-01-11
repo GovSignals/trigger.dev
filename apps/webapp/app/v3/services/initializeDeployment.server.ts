@@ -69,34 +69,51 @@ export class InitializeDeploymentService extends BaseService {
           })
         : undefined;
 
-      const [imageRefError, imageRefResult] = await tryCatch(
-        getDeploymentImageRef({
-          host: env.DEPLOY_REGISTRY_HOST,
-          namespace: env.DEPLOY_REGISTRY_NAMESPACE,
-          projectRef: environment.project.externalRef,
-          nextVersion,
-          environmentSlug: environment.slug,
-          registryTags: env.DEPLOY_REGISTRY_ECR_TAGS,
-          assumeRole: {
-            roleArn: env.DEPLOY_REGISTRY_ECR_ASSUME_ROLE_ARN,
-            externalId: env.DEPLOY_REGISTRY_ECR_ASSUME_ROLE_EXTERNAL_ID,
-          },
-        })
-      );
+      // If DEPLOY_IMAGE_OVERRIDE is set, use it instead of generating an image reference
+      let imageRef: string;
+      let isEcr = false;
+      let repoCreated = false;
 
-      if (imageRefError) {
-        logger.error("Failed to get deployment image ref", {
+      if (env.DEPLOY_IMAGE_OVERRIDE) {
+        imageRef = env.DEPLOY_IMAGE_OVERRIDE;
+        logger.info("Using image override", {
+          imageRef,
           environmentId: environment.id,
           projectId: environment.projectId,
           version: nextVersion,
-          triggeredById: triggeredBy?.id,
-          type: payload.type,
-          cause: imageRefError.message,
         });
-        throw new ServiceValidationError("Failed to get deployment image ref");
-      }
+      } else {
+        const [imageRefError, imageRefResult] = await tryCatch(
+          getDeploymentImageRef({
+            host: env.DEPLOY_REGISTRY_HOST,
+            namespace: env.DEPLOY_REGISTRY_NAMESPACE,
+            projectRef: environment.project.externalRef,
+            nextVersion,
+            environmentSlug: environment.slug,
+            registryTags: env.DEPLOY_REGISTRY_ECR_TAGS,
+            assumeRole: {
+              roleArn: env.DEPLOY_REGISTRY_ECR_ASSUME_ROLE_ARN,
+              externalId: env.DEPLOY_REGISTRY_ECR_ASSUME_ROLE_EXTERNAL_ID,
+            },
+          })
+        );
 
-      const { imageRef, isEcr, repoCreated } = imageRefResult;
+        if (imageRefError) {
+          logger.error("Failed to get deployment image ref", {
+            environmentId: environment.id,
+            projectId: environment.projectId,
+            version: nextVersion,
+            triggeredById: triggeredBy?.id,
+            type: payload.type,
+            cause: imageRefError.message,
+          });
+          throw new ServiceValidationError("Failed to get deployment image ref");
+        }
+
+        imageRef = imageRefResult.imageRef;
+        isEcr = imageRefResult.isEcr;
+        repoCreated = imageRefResult.repoCreated;
+      }
 
       logger.debug("Creating deployment", {
         environmentId: environment.id,

@@ -21,6 +21,22 @@ export type WaitpointSystemOptions = {
   enqueueSystem: EnqueueSystem;
 };
 
+type WaitpointContinuationWaitpoint = Pick<Waitpoint, "id" | "type" | "completedAfter" | "status">;
+
+export type WaitpointContinuationResult =
+  | {
+      status: "unblocked";
+      waitpoints: Array<WaitpointContinuationWaitpoint>;
+    }
+  | {
+      status: "skipped";
+      reason: string;
+    }
+  | {
+      status: "blocked";
+      waitpoints: Array<WaitpointContinuationWaitpoint>;
+    };
+
 export class WaitpointSystem {
   private readonly $: SystemResources;
   private readonly executionSnapshotSystem: ExecutionSnapshotSystem;
@@ -63,8 +79,8 @@ export class WaitpointSystem {
     };
   }): Promise<Waitpoint> {
     // 1. Complete the Waitpoint (if not completed)
-    let [waitpointError, waitpoint] = await tryCatch(
-      this.$.prisma.waitpoint.update({
+    const [updateError, updateResult] = await tryCatch(
+      this.$.prisma.waitpoint.updateMany({
         where: { id, status: "PENDING" },
         data: {
           status: "COMPLETED",
@@ -76,29 +92,32 @@ export class WaitpointSystem {
       })
     );
 
-    if (waitpointError) {
-      if (
-        waitpointError instanceof Prisma.PrismaClientKnownRequestError &&
-        waitpointError.code === "P2025"
-      ) {
-        waitpoint = await this.$.prisma.waitpoint.findFirst({
-          where: { id },
-        });
-      } else {
-        this.$.logger.log("completeWaitpoint: error updating waitpoint:", { waitpointError });
-        throw waitpointError;
-      }
+    if (updateError) {
+      this.$.logger.error("completeWaitpoint: error updating waitpoint:", { updateError });
+      throw updateError;
     }
 
+    if (updateResult.count === 0) {
+      this.$.logger.info(
+        "completeWaitpoint: attempted to complete a waitpoint that is not PENDING",
+        { waitpointId: id }
+      );
+    }
+
+    const waitpoint = await this.$.prisma.waitpoint.findFirst({
+      where: { id },
+    });
+
     if (!waitpoint) {
-      throw new Error(`Waitpoint ${id} not found`);
+      this.$.logger.error("completeWaitpoint: waitpoint not found", { waitpointId: id });
+      throw new Error("Waitpoint not found");
     }
 
     if (waitpoint.status !== "COMPLETED") {
       this.$.logger.error(`completeWaitpoint: waitpoint is not completed`, {
         waitpointId: id,
       });
-      throw new Error(`Waitpoint ${id} is not completed`);
+      throw new Error("Waitpoint not completed");
     }
 
     // 2. Find the TaskRuns blocked by this waitpoint
@@ -144,6 +163,7 @@ export class WaitpointSystem {
           },
           blockedRunId: run.taskRunId,
           hasError: output?.isError ?? false,
+          cachedRunId: waitpoint.completedByTaskRunId ?? undefined,
         });
       }
     }
@@ -480,7 +500,7 @@ export class WaitpointSystem {
     runId,
   }: {
     runId: string;
-  }): Promise<"blocked" | "unblocked" | "skipped"> {
+  }): Promise<WaitpointContinuationResult> {
     this.$.logger.debug(`continueRunIfUnblocked: start`, {
       runId,
     });
@@ -496,7 +516,7 @@ export class WaitpointSystem {
           batchId: true,
           batchIndex: true,
           waitpoint: {
-            select: { id: true, status: true },
+            select: { id: true, status: true, type: true, completedAfter: true },
           },
         },
       });
@@ -507,7 +527,11 @@ export class WaitpointSystem {
           runId,
           blockingWaitpoints,
         });
-        return "blocked";
+
+        return {
+          status: "blocked",
+          waitpoints: blockingWaitpoints.map((w) => w.waitpoint),
+        };
       }
 
       // 3. Get the run with environment
@@ -547,7 +571,22 @@ export class WaitpointSystem {
             executionStatus: snapshot.executionStatus,
           });
 
-          return "skipped";
+          return {
+            status: "skipped",
+            reason: "run is already executing",
+          };
+        }
+        case "DELAYED": {
+          this.$.logger.debug(`continueRunIfUnblocked: run is delayed, skipping`, {
+            runId,
+            snapshot,
+            executionStatus: snapshot.executionStatus,
+          });
+
+          return {
+            status: "skipped",
+            reason: "run is delayed",
+          };
         }
         case "QUEUED": {
           this.$.logger.info(`continueRunIfUnblocked: run is queued, skipping`, {
@@ -556,7 +595,10 @@ export class WaitpointSystem {
             executionStatus: snapshot.executionStatus,
           });
 
-          return "skipped";
+          return {
+            status: "skipped",
+            reason: "run is already queued",
+          };
         }
         case "PENDING_EXECUTING": {
           this.$.logger.info(`continueRunIfUnblocked: run is pending executing, skipping`, {
@@ -565,7 +607,10 @@ export class WaitpointSystem {
             executionStatus: snapshot.executionStatus,
           });
 
-          return "skipped";
+          return {
+            status: "skipped",
+            reason: "run is already pending executing",
+          };
         }
         case "QUEUED_EXECUTING": {
           this.$.logger.info(`continueRunIfUnblocked: run is already queued executing, skipping`, {
@@ -574,7 +619,10 @@ export class WaitpointSystem {
             executionStatus: snapshot.executionStatus,
           });
 
-          return "skipped";
+          return {
+            status: "skipped",
+            reason: "run is already queued executing",
+          };
         }
         case "EXECUTING": {
           this.$.logger.info(`continueRunIfUnblocked: run is already executing, skipping`, {
@@ -583,7 +631,10 @@ export class WaitpointSystem {
             executionStatus: snapshot.executionStatus,
           });
 
-          return "skipped";
+          return {
+            status: "skipped",
+            reason: "run is already executing",
+          };
         }
         case "PENDING_CANCEL":
         case "FINISHED": {
@@ -592,7 +643,10 @@ export class WaitpointSystem {
             snapshot,
             executionStatus: snapshot.executionStatus,
           });
-          return "skipped";
+          return {
+            status: "skipped",
+            reason: "run is finished",
+          };
         }
         case "EXECUTING_WITH_WAITPOINTS": {
           const newSnapshot = await this.executionSnapshotSystem.createExecutionSnapshot(
@@ -693,29 +747,28 @@ export class WaitpointSystem {
         });
       }
 
-      return "unblocked";
+      return {
+        status: "unblocked",
+        waitpoints: blockingWaitpoints.map((w) => w.waitpoint),
+      };
     }); // end of runlock
   }
 
-  public async createRunAssociatedWaitpoint(
-    tx: PrismaClientOrTransaction,
-    {
+  public buildRunAssociatedWaitpoint({
+    projectId,
+    environmentId,
+  }: {
+    projectId: string;
+    environmentId: string;
+  }) {
+    return {
+      ...WaitpointId.generate(),
+      type: "RUN" as const,
+      status: "PENDING" as const,
+      idempotencyKey: nanoid(24),
+      userProvidedIdempotencyKey: false,
       projectId,
       environmentId,
-      completedByTaskRunId,
-    }: { projectId: string; environmentId: string; completedByTaskRunId: string }
-  ) {
-    return tx.waitpoint.create({
-      data: {
-        ...WaitpointId.generate(),
-        type: "RUN",
-        status: "PENDING",
-        idempotencyKey: nanoid(24),
-        userProvidedIdempotencyKey: false,
-        projectId,
-        environmentId,
-        completedByTaskRunId,
-      },
-    });
+    };
   }
 }

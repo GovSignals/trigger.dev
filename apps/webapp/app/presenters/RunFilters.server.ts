@@ -1,9 +1,10 @@
+import { type TaskRunStatus } from "@trigger.dev/database";
 import {
   getRunFiltersFromSearchParams,
   TaskRunListSearchFilters,
 } from "~/components/runs/v3/RunFilters";
 import { getRootOnlyFilterPreference } from "~/services/preferences/uiPreferences.server";
-import { type ParsedRunFilters } from "~/services/runsRepository.server";
+import { type ParsedRunFilters } from "~/services/runsRepository/runsRepository.server";
 
 type FiltersFromRequest = ParsedRunFilters & Required<Pick<ParsedRunFilters, "rootOnly">>;
 
@@ -39,7 +40,7 @@ export async function getRunFiltersFromRequest(request: Request): Promise<Filter
   return {
     tasks,
     versions,
-    statuses,
+    statuses: statuses as TaskRunStatus[] | undefined,
     tags,
     period,
     bulkId,

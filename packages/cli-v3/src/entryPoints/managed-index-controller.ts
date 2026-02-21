@@ -8,6 +8,7 @@ import { env } from "std-env";
 import { indexWorkerManifest } from "../indexing/indexWorkerManifest.js";
 import { resolveSourceFiles } from "../utilities/sourceFiles.js";
 import { execOptionsForRuntime } from "@trigger.dev/core/v3/build";
+import { writeJSONFile } from "../utilities/fileSystem.js";
 
 async function loadBuildManifest() {
   const manifestContents = await readFile("./build.json", "utf-8");
@@ -82,7 +83,8 @@ async function indexDeployment({
 
     console.log("Writing index.json", process.cwd());
 
-    await writeFile(join(process.cwd(), "index.json"), JSON.stringify(workerManifest, null, 2));
+    const { timings, ...manifestWithoutTimings } = workerManifest;
+    await writeJSONFile(join(process.cwd(), "index.json"), manifestWithoutTimings, true);
 
     const sourceFiles = resolveSourceFiles(buildManifest.sources, workerManifest.tasks);
 

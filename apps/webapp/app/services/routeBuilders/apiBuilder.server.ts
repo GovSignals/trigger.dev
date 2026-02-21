@@ -22,6 +22,9 @@ import {
   WorkerGroupTokenService,
 } from "~/v3/services/worker/workerGroupTokenService.server";
 import { API_VERSIONS, getApiVersion } from "~/api/versions";
+import { WORKER_HEADERS } from "@trigger.dev/core/v3/runEngineWorker";
+import { ServiceValidationError } from "~/v3/services/common.server";
+import { EngineServiceValidationError } from "@internal/run-engine";
 
 type AnyZodSchema = z.ZodFirstPartySchemaTypes | z.ZodDiscriminatedUnion<any, any>;
 
@@ -430,7 +433,8 @@ type ApiKeyActionRouteBuilderOptions<
   TParamsSchema extends AnyZodSchema | undefined = undefined,
   TSearchParamsSchema extends AnyZodSchema | undefined = undefined,
   THeadersSchema extends AnyZodSchema | undefined = undefined,
-  TBodySchema extends AnyZodSchema | undefined = undefined
+  TBodySchema extends AnyZodSchema | undefined = undefined,
+  TResource = never
 > = {
   params?: TParamsSchema;
   searchParams?: TSearchParamsSchema;
@@ -438,6 +442,17 @@ type ApiKeyActionRouteBuilderOptions<
   allowJWT?: boolean;
   corsStrategy?: "all" | "none";
   method?: "POST" | "PUT" | "DELETE" | "PATCH";
+  findResource?: (
+    params: TParamsSchema extends z.ZodFirstPartySchemaTypes | z.ZodDiscriminatedUnion<any, any>
+      ? z.infer<TParamsSchema>
+      : undefined,
+    authentication: ApiAuthenticationResultSuccess,
+    searchParams: TSearchParamsSchema extends
+      | z.ZodFirstPartySchemaTypes
+      | z.ZodDiscriminatedUnion<any, any>
+      ? z.infer<TSearchParamsSchema>
+      : undefined
+  ) => Promise<TResource | undefined>;
   authorization?: {
     action: AuthorizationAction;
     resource: (
@@ -466,7 +481,8 @@ type ApiKeyActionHandlerFunction<
   TParamsSchema extends AnyZodSchema | undefined,
   TSearchParamsSchema extends AnyZodSchema | undefined,
   THeadersSchema extends AnyZodSchema | undefined = undefined,
-  TBodySchema extends AnyZodSchema | undefined = undefined
+  TBodySchema extends AnyZodSchema | undefined = undefined,
+  TResource = never
 > = (args: {
   params: TParamsSchema extends z.ZodFirstPartySchemaTypes | z.ZodDiscriminatedUnion<any, any>
     ? z.infer<TParamsSchema>
@@ -484,25 +500,29 @@ type ApiKeyActionHandlerFunction<
     : undefined;
   authentication: ApiAuthenticationResultSuccess;
   request: Request;
+  resource?: TResource;
 }) => Promise<Response>;
 
 export function createActionApiRoute<
   TParamsSchema extends AnyZodSchema | undefined = undefined,
   TSearchParamsSchema extends AnyZodSchema | undefined = undefined,
   THeadersSchema extends AnyZodSchema | undefined = undefined,
-  TBodySchema extends AnyZodSchema | undefined = undefined
+  TBodySchema extends AnyZodSchema | undefined = undefined,
+  TResource = never
 >(
   options: ApiKeyActionRouteBuilderOptions<
     TParamsSchema,
     TSearchParamsSchema,
     THeadersSchema,
-    TBodySchema
+    TBodySchema,
+    TResource
   >,
   handler: ApiKeyActionHandlerFunction<
     TParamsSchema,
     TSearchParamsSchema,
     THeadersSchema,
-    TBodySchema
+    TBodySchema,
+    TResource
   >
 ) {
   const {
@@ -682,6 +702,18 @@ export function createActionApiRoute<
         }
       }
 
+      const resource = options.findResource
+        ? await options.findResource(parsedParams, authenticationResult, parsedSearchParams)
+        : undefined;
+
+      if (options.findResource && !resource) {
+        return await wrapResponse(
+          request,
+          json({ error: "Resource not found" }, { status: 404 }),
+          corsStrategy !== "none"
+        );
+      }
+
       const result = await handler({
         params: parsedParams,
         searchParams: parsedSearchParams,
@@ -689,6 +721,7 @@ export function createActionApiRoute<
         body: parsedBody,
         authentication: authenticationResult,
         request,
+        resource,
       });
       return await wrapResponse(request, result, corsStrategy !== "none");
     } catch (error) {
@@ -765,6 +798,7 @@ type WorkerLoaderHandlerFunction<
   headers: THeadersSchema extends z.ZodFirstPartySchemaTypes | z.ZodDiscriminatedUnion<any, any>
     ? z.infer<THeadersSchema>
     : undefined;
+  runnerId?: string;
 }) => Promise<Response>;
 
 export function createLoaderWorkerApiRoute<
@@ -828,12 +862,15 @@ export function createLoaderWorkerApiRoute<
         parsedHeaders = headers.data;
       }
 
+      const runnerId = request.headers.get(WORKER_HEADERS.RUNNER_ID) ?? undefined;
+
       const result = await handler({
         params: parsedParams,
         searchParams: parsedSearchParams,
         authenticatedWorker: authenticationResult,
         request,
         headers: parsedHeaders,
+        runnerId,
       });
       return result;
     } catch (error) {
@@ -894,6 +931,7 @@ type WorkerActionHandlerFunction<
   body: TBodySchema extends z.ZodFirstPartySchemaTypes | z.ZodDiscriminatedUnion<any, any>
     ? z.infer<TBodySchema>
     : undefined;
+  runnerId?: string;
 }) => Promise<Response>;
 
 export function createActionWorkerApiRoute<
@@ -991,6 +1029,8 @@ export function createActionWorkerApiRoute<
         parsedBody = parsed.data;
       }
 
+      const runnerId = request.headers.get(WORKER_HEADERS.RUNNER_ID) ?? undefined;
+
       const result = await handler({
         params: parsedParams,
         searchParams: parsedSearchParams,
@@ -998,12 +1038,20 @@ export function createActionWorkerApiRoute<
         request,
         body: parsedBody,
         headers: parsedHeaders,
+        runnerId,
       });
       return result;
     } catch (error) {
-      console.error("Error in API route:", error);
       if (error instanceof Response) {
         return error;
+      }
+
+      if (error instanceof EngineServiceValidationError) {
+        return json({ error: error.message }, { status: error.status ?? 422 });
+      }
+
+      if (error instanceof ServiceValidationError) {
+        return json({ error: error.message }, { status: error.status ?? 422 });
       }
 
       logger.error("Error in action", {

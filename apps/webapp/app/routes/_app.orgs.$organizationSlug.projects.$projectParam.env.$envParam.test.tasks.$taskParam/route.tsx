@@ -54,7 +54,7 @@ import {
   TestTaskPresenter,
 } from "~/presenters/v3/TestTaskPresenter.server";
 import { logger } from "~/services/logger.server";
-import { requireUserId } from "~/services/session.server";
+import { requireUser } from "~/services/session.server";
 import { cn } from "~/utils/cn";
 import { docsPath, v3RunSpanPath, v3TaskParamsSchema, v3TestPath } from "~/utils/pathBuilder";
 import { TestTaskService } from "~/v3/services/testTask.server";
@@ -73,14 +73,17 @@ import { DeleteTaskRunTemplateData, RunTemplateData } from "~/v3/taskRunTemplate
 import { Dialog, DialogContent, DialogHeader, DialogTrigger } from "~/components/primitives/Dialog";
 import { DialogClose, DialogDescription } from "@radix-ui/react-dialog";
 import { FormButtons } from "~/components/primitives/FormButtons";
+import { $replica } from "~/db.server";
+import { clickhouseClient } from "~/services/clickhouseInstance.server";
+import { RegionsPresenter, type Region } from "~/presenters/v3/RegionsPresenter.server";
 
 type FormAction = "create-template" | "delete-template" | "run-scheduled" | "run-standard";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const userId = await requireUserId(request);
+  const user = await requireUser(request);
   const { projectParam, organizationSlug, envParam, taskParam } = v3TaskParamsSchema.parse(params);
 
-  const project = await findProjectBySlug(organizationSlug, projectParam, userId);
+  const project = await findProjectBySlug(organizationSlug, projectParam, user.id);
   if (!project) {
     throw new Response(undefined, {
       status: 404,
@@ -88,7 +91,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     });
   }
 
-  const environment = await findEnvironmentBySlug(project.id, envParam, userId);
+  const environment = await findEnvironmentBySlug(project.id, envParam, user.id);
   if (!environment) {
     throw new Response(undefined, {
       status: 404,
@@ -96,16 +99,23 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     });
   }
 
-  const presenter = new TestTaskPresenter();
+  const presenter = new TestTaskPresenter($replica, clickhouseClient);
   try {
-    const result = await presenter.call({
-      userId,
-      projectId: project.id,
-      taskIdentifier: taskParam,
-      environment: environment,
-    });
+    const [result, regionsResult] = await Promise.all([
+      presenter.call({
+        userId: user.id,
+        projectId: project.id,
+        taskIdentifier: taskParam,
+        environment: environment,
+      }),
+      new RegionsPresenter().call({
+        userId: user.id,
+        projectSlug: projectParam,
+        isAdmin: user.admin || user.isImpersonating,
+      }),
+    ]);
 
-    return typedjson(result);
+    return typedjson({ ...result, regions: regionsResult.regions });
   } catch (error) {
     return redirectWithErrorMessage(
       v3TestPath({ slug: organizationSlug }, { slug: projectParam }, environment),
@@ -116,15 +126,15 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action: ActionFunction = async ({ request, params }) => {
-  const userId = await requireUserId(request);
+  const user = await requireUser(request);
   const { organizationSlug, projectParam, envParam } = v3TaskParamsSchema.parse(params);
 
-  const project = await findProjectBySlug(organizationSlug, projectParam, userId);
+  const project = await findProjectBySlug(organizationSlug, projectParam, user.id);
   if (!project) {
     return redirectBackWithErrorMessage(request, "Project not found");
   }
 
-  const environment = await findEnvironmentBySlug(project.id, envParam, userId);
+  const environment = await findEnvironmentBySlug(project.id, envParam, user.id);
 
   if (!environment) {
     return redirectBackWithErrorMessage(request, "Environment not found");
@@ -288,6 +298,7 @@ export default function Page() {
           templates={result.taskRunTemplates}
           disableVersionSelection={result.disableVersionSelection}
           allowArbitraryQueues={result.allowArbitraryQueues}
+          regions={result.regions}
         />
       );
     }
@@ -302,6 +313,7 @@ export default function Page() {
           possibleTimezones={result.possibleTimezones}
           disableVersionSelection={result.disableVersionSelection}
           allowArbitraryQueues={result.allowArbitraryQueues}
+          regions={result.regions}
         />
       );
     }
@@ -322,6 +334,7 @@ function StandardTaskForm({
   templates,
   disableVersionSelection,
   allowArbitraryQueues,
+  regions,
 }: {
   task: StandardTaskResult["task"];
   queues: Required<StandardTaskResult>["queue"][];
@@ -330,6 +343,7 @@ function StandardTaskForm({
   templates: RunTemplate[];
   disableVersionSelection: boolean;
   allowArbitraryQueues: boolean;
+  regions: Region[];
 }) {
   const environment = useEnvironment();
   const { value, replace } = useSearchParams();
@@ -371,6 +385,12 @@ function StandardTaskForm({
   );
   const [queueValue, setQueueValue] = useState<string | undefined>(lastRun?.queue);
   const [machineValue, setMachineValue] = useState<string | undefined>(lastRun?.machinePreset);
+  const isDev = environment.type === "DEVELOPMENT";
+  const defaultRegion = regions.find((r) => r.isDefault);
+  const [regionValue, setRegionValue] = useState<string | undefined>(
+    isDev ? undefined : defaultRegion?.name
+  );
+
   const [maxAttemptsValue, setMaxAttemptsValue] = useState<number | undefined>(
     lastRun?.maxAttempts
   );
@@ -378,6 +398,12 @@ function StandardTaskForm({
     lastRun?.maxDurationInSeconds
   );
   const [tagsValue, setTagsValue] = useState<string[]>(lastRun?.runTags ?? []);
+
+  const regionItems = regions.map((r) => ({
+    value: r.name,
+    label: r.description ? `${r.name} — ${r.description}` : r.name,
+    isDefault: r.isDefault,
+  }));
 
   const queueItems = queues.map((q) => ({
     value: q.type === "task" ? `task/${q.name}` : q.name,
@@ -407,6 +433,8 @@ function StandardTaskForm({
       tags,
       version,
       machine,
+      region,
+      prioritySeconds,
     },
   ] = useForm({
     id: "test-task",
@@ -577,6 +605,45 @@ function StandardTaskForm({
                 )}
                 <FormError id={version.errorId}>{version.error}</FormError>
               </InputGroup>
+              {regionItems.length > 1 && (
+                <InputGroup>
+                  <Label htmlFor={region.id} variant="small">
+                    Region
+                  </Label>
+                  {/* Our Select primitive uses Ariakit under the hood, which treats
+                      value={undefined} as uncontrolled, keeping stale internal state when
+                      switching environments. The key forces a remount so it reinitializes
+                      with the correct defaultValue. */}
+                  <Select
+                    key={`region-${environment.id}`}
+                    {...conform.select(region)}
+                    variant="tertiary/small"
+                    placeholder={isDev ? "–" : undefined}
+                    dropdownIcon
+                    items={regionItems}
+                    defaultValue={isDev ? undefined : defaultRegion?.name}
+                    value={isDev ? undefined : regionValue}
+                    setValue={isDev ? undefined : (e) => {
+                      if (Array.isArray(e)) return;
+                      setRegionValue(e);
+                    }}
+                    disabled={isDev}
+                  >
+                    {regionItems.map((r) => (
+                      <SelectItem key={r.value} value={r.value}>
+                        {r.label}
+                        {r.isDefault ? " (default)" : ""}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                  {isDev ? (
+                    <Hint>Region is not available in the development environment.</Hint>
+                  ) : (
+                    <Hint>Overrides the region for this run.</Hint>
+                  )}
+                  <FormError id={region.errorId}>{region.error}</FormError>
+                </InputGroup>
+              )}
               <InputGroup>
                 <Label htmlFor={queue.id} variant="small">
                   Queue
@@ -729,6 +796,12 @@ function StandardTaskForm({
                 <FormError id={delaySeconds.errorId}>{delaySeconds.error}</FormError>
               </InputGroup>
               <InputGroup>
+                <Label variant="small">Priority</Label>
+                <DurationPicker name={prioritySeconds.name} id={prioritySeconds.id} />
+                <Hint>Sets the priority of the run. Higher values mean higher priority.</Hint>
+                <FormError id={prioritySeconds.errorId}>{prioritySeconds.error}</FormError>
+              </InputGroup>
+              <InputGroup>
                 <Label variant="small">TTL</Label>
                 <DurationPicker
                   name={ttlSeconds.name}
@@ -794,6 +867,7 @@ function ScheduledTaskForm({
   templates,
   disableVersionSelection,
   allowArbitraryQueues,
+  regions,
 }: {
   task: ScheduledTaskResult["task"];
   runs: ScheduledRun[];
@@ -803,6 +877,7 @@ function ScheduledTaskForm({
   templates: RunTemplate[];
   disableVersionSelection: boolean;
   allowArbitraryQueues: boolean;
+  regions: Region[];
 }) {
   const environment = useEnvironment();
 
@@ -824,6 +899,12 @@ function ScheduledTaskForm({
   );
   const [queueValue, setQueueValue] = useState<string | undefined>(lastRun?.queue);
   const [machineValue, setMachineValue] = useState<string | undefined>(lastRun?.machinePreset);
+  const isDev = environment.type === "DEVELOPMENT";
+  const defaultRegion = regions.find((r) => r.isDefault);
+  const [regionValue, setRegionValue] = useState<string | undefined>(
+    isDev ? undefined : defaultRegion?.name
+  );
+
   const [maxAttemptsValue, setMaxAttemptsValue] = useState<number | undefined>(
     lastRun?.maxAttempts
   );
@@ -833,6 +914,12 @@ function ScheduledTaskForm({
   const [tagsValue, setTagsValue] = useState<string[]>(lastRun?.runTags ?? []);
 
   const [showTemplateCreatedSuccessMessage, setShowTemplateCreatedSuccessMessage] = useState(false);
+
+  const regionItems = regions.map((r) => ({
+    value: r.name,
+    label: r.description ? `${r.name} — ${r.description}` : r.name,
+    isDefault: r.isDefault,
+  }));
 
   const queueItems = queues.map((q) => ({
     value: q.type === "task" ? `task/${q.name}` : q.name,
@@ -870,6 +957,8 @@ function ScheduledTaskForm({
       tags,
       version,
       machine,
+      region,
+      prioritySeconds,
     },
   ] = useForm({
     id: "test-task-scheduled",
@@ -1091,6 +1180,45 @@ function ScheduledTaskForm({
             )}
             <FormError id={version.errorId}>{version.error}</FormError>
           </InputGroup>
+          {regionItems.length > 1 && (
+            <InputGroup>
+              <Label htmlFor={region.id} variant="small">
+                Region
+              </Label>
+              {/* Our Select primitive uses Ariakit under the hood, which treats
+                  value={undefined} as uncontrolled, keeping stale internal state when
+                  switching environments. The key forces a remount so it reinitializes
+                  with the correct defaultValue. */}
+              <Select
+                key={`region-${environment.id}`}
+                {...conform.select(region)}
+                variant="tertiary/small"
+                placeholder={isDev ? "–" : undefined}
+                dropdownIcon
+                items={regionItems}
+                defaultValue={isDev ? undefined : defaultRegion?.name}
+                value={isDev ? undefined : regionValue}
+                setValue={isDev ? undefined : (e) => {
+                  if (Array.isArray(e)) return;
+                  setRegionValue(e);
+                }}
+                disabled={isDev}
+              >
+                {regionItems.map((r) => (
+                  <SelectItem key={r.value} value={r.value}>
+                    {r.label}
+                    {r.isDefault ? " (default)" : ""}
+                  </SelectItem>
+                ))}
+              </Select>
+              {isDev ? (
+                <Hint>Region is not available in the development environment.</Hint>
+              ) : (
+                <Hint>Overrides the region for this run.</Hint>
+              )}
+              <FormError id={region.errorId}>{region.error}</FormError>
+            </InputGroup>
+          )}
           <InputGroup>
             <Label htmlFor={queue.id} variant="small">
               Queue
@@ -1234,6 +1362,14 @@ function ScheduledTaskForm({
             />
             <Hint>Limits concurrency by creating a separate queue for each value of the key.</Hint>
             <FormError id={concurrencyKey.errorId}>{concurrencyKey.error}</FormError>
+          </InputGroup>
+          <InputGroup>
+            <Label htmlFor={prioritySeconds.id} variant="small">
+              Priority
+            </Label>
+            <DurationPicker name={prioritySeconds.name} id={prioritySeconds.id} />
+            <Hint>Sets the priority of the run. Higher values mean higher priority.</Hint>
+            <FormError id={prioritySeconds.errorId}>{prioritySeconds.error}</FormError>
           </InputGroup>
           <InputGroup>
             <Label htmlFor={ttlSeconds.id} variant="small">

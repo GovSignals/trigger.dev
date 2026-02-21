@@ -1,6 +1,6 @@
 import { nanoid, customAlphabet } from "nanoid";
 import slug from "slug";
-import { prisma } from "~/db.server";
+import { $replica, prisma } from "~/db.server";
 import type { Project } from "@trigger.dev/database";
 import { Organization, createEnvironment } from "./organization.server";
 import { env } from "~/env.server";
@@ -16,12 +16,26 @@ type Options = {
   version: "v2" | "v3";
 };
 
+export class ExceededProjectLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ExceededProjectLimitError";
+  }
+}
+
 export async function createProject(
   { organizationSlug, name, userId, version }: Options,
   attemptCount = 0
 ): Promise<Project & { organization: Organization }> {
   //check the user has permissions to do this
   const organization = await prisma.organization.findFirst({
+    select: {
+      id: true,
+      slug: true,
+      v3Enabled: true,
+      maximumConcurrencyLimit: true,
+      maximumProjectCount: true,
+    },
     where: {
       slug: organizationSlug,
       members: { some: { userId } },
@@ -38,6 +52,19 @@ export async function createProject(
     if (!organization.v3Enabled) {
       throw new Error(`Organization can't create v3 projects.`);
     }
+  }
+
+  const projectCount = await prisma.project.count({
+    where: {
+      organizationId: organization.id,
+      deletedAt: null,
+    },
+  });
+
+  if (projectCount >= organization.maximumProjectCount) {
+    throw new ExceededProjectLimitError(
+      `This organization has reached the maximum number of projects (${organization.maximumProjectCount}).`
+    );
   }
 
   //ensure the slug is globally unique
@@ -108,7 +135,7 @@ export async function createProject(
 
 export async function findProjectBySlug(orgSlug: string, projectSlug: string, userId: string) {
   // Find the project scoped to the organization, making sure the user belongs to that org
-  return await prisma.project.findFirst({
+  return await $replica.project.findFirst({
     where: {
       slug: projectSlug,
       organization: {
@@ -121,7 +148,7 @@ export async function findProjectBySlug(orgSlug: string, projectSlug: string, us
 
 export async function findProjectByRef(externalRef: string, userId: string) {
   // Find the project scoped to the organization, making sure the user belongs to that org
-  return await prisma.project.findFirst({
+  return await $replica.project.findFirst({
     where: {
       externalRef,
       organization: {

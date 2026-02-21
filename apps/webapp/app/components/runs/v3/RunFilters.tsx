@@ -31,6 +31,7 @@ import { DateTime } from "~/components/primitives/DateTime";
 import { FormError } from "~/components/primitives/FormError";
 import { Input } from "~/components/primitives/Input";
 import { Label } from "~/components/primitives/Label";
+import { MiddleTruncate } from "~/components/primitives/MiddleTruncate";
 import { Paragraph } from "~/components/primitives/Paragraph";
 import {
   ComboBox,
@@ -58,10 +59,10 @@ import { useProject } from "~/hooks/useProject";
 import { useSearchParams } from "~/hooks/useSearchParam";
 import { type loader as queuesLoader } from "~/routes/resources.orgs.$organizationSlug.projects.$projectParam.env.$envParam.queues";
 import { type loader as versionsLoader } from "~/routes/resources.orgs.$organizationSlug.projects.$projectParam.env.$envParam.versions";
-import { type loader as tagsLoader } from "~/routes/resources.projects.$projectParam.runs.tags";
+import { type loader as tagsLoader } from "~/routes/resources.environments.$envId.runs.tags";
 import { Button } from "../../primitives/Buttons";
 import { BulkActionTypeCombo } from "./BulkAction";
-import { appliedSummary, FilterMenuProvider, TimeFilter } from "./SharedFilters";
+import { appliedSummary, FilterMenuProvider, TimeFilter, timeFilters } from "./SharedFilters";
 import { AIFilterInput } from "./AIFilterInput";
 import {
   allTaskRunStatuses,
@@ -280,7 +281,7 @@ export function getRunFiltersFromSearchParams(
     bulkId: searchParams.get("bulkId") ?? undefined,
     tags:
       searchParams.getAll("tags").filter((v) => v.length > 0).length > 0
-        ? searchParams.getAll("tags").map((t) => decodeURIComponent(t))
+        ? searchParams.getAll("tags")
         : undefined,
     from: searchParams.get("from") ?? undefined,
     to: searchParams.get("to") ?? undefined,
@@ -324,6 +325,10 @@ type RunFiltersProps = {
   }[];
   rootOnlyDefault: boolean;
   hasFilters: boolean;
+  /** Hide the AI search input (useful when replacing with a custom search component) */
+  hideSearch?: boolean;
+  /** Custom default period for the time filter (e.g., "1h", "7d") */
+  defaultPeriod?: string;
 };
 
 export function RunsFilters(props: RunFiltersProps) {
@@ -344,9 +349,9 @@ export function RunsFilters(props: RunFiltersProps) {
   return (
     <div className="flex flex-row flex-wrap items-center gap-1">
       <FilterMenu {...props} />
-      <AIFilterInput />
+      {!props.hideSearch && <AIFilterInput />}
       <RootOnlyToggle defaultValue={props.rootOnlyDefault} />
-      <TimeFilter />
+      <TimeFilter defaultPeriod={props.defaultPeriod} />
       <AppliedFilters {...props} />
       {hasFilters && (
         <Form className="h-6">
@@ -630,7 +635,7 @@ function TasksDropdown({
     <SelectProvider value={values("tasks")} setValue={handleChange} virtualFocus={true}>
       {trigger}
       <SelectPopover
-        className="min-w-0 max-w-[min(240px,var(--popover-available-width))]"
+        className="min-w-0 max-w-[min(360px,var(--popover-available-width))]"
         hideOnEscape={() => {
           if (onClose) {
             onClose();
@@ -650,7 +655,7 @@ function TasksDropdown({
                 <TaskTriggerSourceIcon source={item.triggerSource} className="size-4 flex-none" />
               }
             >
-              {item.slug}
+              <MiddleTruncate text={item.slug}/>
             </SelectItem>
           ))}
         </SelectList>
@@ -810,8 +815,8 @@ function TagsDropdown({
   searchValue: string;
   onClose?: () => void;
 }) {
-  const project = useProject();
-  const { values, replace } = useSearchParams();
+  const environment = useEnvironment();
+  const { values, value, replace } = useSearchParams();
 
   const handleChange = (values: string[]) => {
     clearSearchValue();
@@ -822,6 +827,12 @@ function TagsDropdown({
     });
   };
 
+  const { period, from, to } = timeFilters({
+    period: value("period"),
+    from: value("from"),
+    to: value("to"),
+  });
+
   const tagValues = values("tags").filter((v) => v !== "");
   const selected = tagValues.length > 0 ? tagValues : undefined;
 
@@ -830,25 +841,34 @@ function TagsDropdown({
   useEffect(() => {
     const searchParams = new URLSearchParams();
     if (searchValue) {
-      searchParams.set("name", encodeURIComponent(searchValue));
+      searchParams.set("name", searchValue);
     }
-    fetcher.load(`/resources/projects/${project.slug}/runs/tags?${searchParams}`);
-  }, [searchValue]);
+    if (period) {
+      searchParams.set("period", period);
+    }
+    if (from) {
+      searchParams.set("from", from.getTime().toString());
+    }
+    if (to) {
+      searchParams.set("to", to.getTime().toString());
+    }
+    fetcher.load(`/resources/environments/${environment.id}/runs/tags?${searchParams}`);
+  }, [environment.id, searchValue, period, from?.getTime(), to?.getTime()]);
 
   const filtered = useMemo(() => {
     let items: string[] = [];
     if (searchValue === "") {
-      items = selected ?? [];
+      items = [...(selected ?? [])];
     }
 
     if (fetcher.data === undefined) {
       return matchSorter(items, searchValue);
     }
 
-    items.push(...fetcher.data.tags.map((t) => t.name));
+    items.push(...fetcher.data.tags);
 
     return matchSorter(Array.from(new Set(items)), searchValue);
-  }, [searchValue, fetcher.data]);
+  }, [searchValue, fetcher.data, selected]);
 
   return (
     <SelectProvider value={selected ?? []} setValue={handleChange} virtualFocus={true}>
@@ -958,7 +978,7 @@ function QueuesDropdown({
       const searchParams = new URLSearchParams();
       searchParams.set("per_page", "25");
       if (searchValue) {
-        searchParams.set("query", encodeURIComponent(s));
+        searchParams.set("query", s);
       }
       fetcher.load(
         `/resources/orgs/${organization.slug}/projects/${project.slug}/env/${
@@ -1220,7 +1240,7 @@ function VersionsDropdown({
     (s) => {
       const searchParams = new URLSearchParams();
       if (searchValue) {
-        searchParams.set("query", encodeURIComponent(s));
+        searchParams.set("query", s);
       }
       fetcher.load(
         `/resources/orgs/${organization.slug}/projects/${project.slug}/env/${
@@ -1286,8 +1306,10 @@ function VersionsDropdown({
           {filtered.length > 0
             ? filtered.map((version) => (
                 <SelectItem key={version.version} value={version.version}>
-                  {version.version}{" "}
-                  {version.isCurrent ? <Badge variant="extra-small">current</Badge> : null}
+                  <span className="flex items-center gap-2">
+                    <span className="grow truncate">{version.version}</span>
+                    {version.isCurrent ? <Badge variant="extra-small">Current</Badge> : null}
+                  </span>
                 </SelectItem>
               ))
             : null}

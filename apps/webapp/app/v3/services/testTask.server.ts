@@ -28,7 +28,9 @@ export class TestTaskService extends BaseService {
             maxDuration: data.maxDurationSeconds,
             tags: data.tags,
             machine: data.machine,
+            region: data.region,
             lockToVersion: data.version === "latest" ? undefined : data.version,
+            priority: data.prioritySeconds,
           },
         });
 
@@ -65,7 +67,9 @@ export class TestTaskService extends BaseService {
               maxDuration: data.maxDurationSeconds,
               tags: data.tags,
               machine: data.machine,
+              region: data.region,
               lockToVersion: data.version === "latest" ? undefined : data.version,
+              priority: data.prioritySeconds,
             },
           },
           { customIcon: "scheduled" }

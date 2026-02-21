@@ -163,6 +163,8 @@ const allVariants = {
   variant: variant,
 };
 
+export type ButtonVariant = keyof typeof variant;
+
 export type ButtonContentPropsType = {
   children?: React.ReactNode;
   LeadingIcon?: RenderIcon;
@@ -173,7 +175,7 @@ export type ButtonContentPropsType = {
   textAlignLeft?: boolean;
   className?: string;
   shortcut?: ShortcutDefinition;
-  variant: keyof typeof variant;
+  variant: ButtonVariant;
   shortcutPosition?: "before-trailing-icon" | "after-trailing-icon";
   tooltip?: ReactNode;
   iconSpacing?: string;
@@ -274,7 +276,7 @@ export function ButtonContent(props: ButtonContentPropsType) {
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>{buttonContent}</TooltipTrigger>
-          <TooltipContent className="text-dimmed flex items-center gap-3 py-1.5 pl-2.5 pr-3 text-xs">
+          <TooltipContent className="flex items-center gap-3 py-1.5 pl-2.5 pr-3 text-xs text-text-bright">
             {tooltip} {shortcut && renderShortcutKey()}
           </TooltipContent>
         </Tooltip>
@@ -296,19 +298,17 @@ export const Button = forwardRef<HTMLButtonElement, ButtonPropsType>(
     const innerRef = useRef<HTMLButtonElement>(null);
     useImperativeHandle(ref, () => innerRef.current as HTMLButtonElement);
 
-    if (props.shortcut) {
-      useShortcutKeys({
-        shortcut: props.shortcut,
-        action: (e) => {
-          if (innerRef.current) {
-            innerRef.current.click();
-            e.preventDefault();
-            e.stopPropagation();
-          }
-        },
-        disabled,
-      });
-    }
+    useShortcutKeys({
+      shortcut: props.shortcut,
+      action: (e) => {
+        if (innerRef.current) {
+          innerRef.current.click();
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      },
+      disabled: disabled || !props.shortcut,
+    });
 
     return (
       <button
@@ -331,7 +331,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonPropsType>(
 type LinkPropsType = Pick<
   LinkProps,
   "to" | "target" | "onClick" | "onMouseDown" | "onMouseEnter" | "onMouseLeave" | "download"
-> & { disabled?: boolean } & React.ComponentProps<typeof ButtonContent>;
+> & { disabled?: boolean; replace?: boolean } & React.ComponentProps<typeof ButtonContent>;
 export const LinkButton = ({
   to,
   onClick,
@@ -340,19 +340,20 @@ export const LinkButton = ({
   onMouseLeave,
   download,
   disabled = false,
+  replace,
   ...props
 }: LinkPropsType) => {
   const innerRef = useRef<HTMLAnchorElement>(null);
-  if (props.shortcut) {
-    useShortcutKeys({
-      shortcut: props.shortcut,
-      action: () => {
-        if (innerRef.current) {
-          innerRef.current.click();
-        }
-      },
-    });
-  }
+  
+  useShortcutKeys({
+    shortcut: props.shortcut,
+    action: () => {
+      if (innerRef.current) {
+        innerRef.current.click();
+      }
+    },
+    disabled: disabled || !props.shortcut,
+  });
 
   if (disabled) {
     return (
@@ -372,7 +373,7 @@ export const LinkButton = ({
       <ExtLink
         href={to.toString()}
         ref={innerRef}
-        className={cn("group/button focus-custom", props.fullWidth ? "w-full" : "")}
+        className={cn("group/button block focus-custom", props.fullWidth ? "w-full" : "")}
         onClick={onClick}
         onMouseDown={onMouseDown}
         onMouseEnter={onMouseEnter}
@@ -387,7 +388,8 @@ export const LinkButton = ({
       <Link
         to={to}
         ref={innerRef}
-        className={cn("group/button focus-custom", props.fullWidth ? "w-full" : "")}
+        replace={replace}
+        className={cn("group/button block focus-custom", props.fullWidth ? "w-full" : "w-fit")}
         onClick={onClick}
         onMouseDown={onMouseDown}
         onMouseEnter={onMouseEnter}
@@ -408,7 +410,7 @@ export const NavLinkButton = ({ to, className, target, ...props }: NavLinkPropsT
   return (
     <NavLink
       to={to}
-      className={cn("group/button outline-none", props.fullWidth ? "w-full" : "")}
+      className={cn("group/button outline-none block", props.fullWidth ? "w-full" : "")}
       target={target}
     >
       {({ isActive, isPending }) => (

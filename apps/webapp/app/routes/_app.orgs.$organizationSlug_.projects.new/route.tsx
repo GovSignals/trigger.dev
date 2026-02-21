@@ -7,7 +7,9 @@ import { Form, useActionData, useNavigation } from "@remix-run/react";
 import { redirect, typedjson, useTypedLoaderData } from "remix-typedjson";
 import invariant from "tiny-invariant";
 import { z } from "zod";
-import { MainCenteredContainer } from "~/components/layout/AppLayout";
+import { BackgroundWrapper } from "~/components/BackgroundWrapper";
+import { Feedback } from "~/components/Feedback";
+import { AppContainer, MainCenteredContainer } from "~/components/layout/AppLayout";
 import { Button, LinkButton } from "~/components/primitives/Buttons";
 import { Callout } from "~/components/primitives/Callout";
 import { Fieldset } from "~/components/primitives/Fieldset";
@@ -20,16 +22,17 @@ import { Label } from "~/components/primitives/Label";
 import { ButtonSpinner } from "~/components/primitives/Spinner";
 import { prisma } from "~/db.server";
 import { featuresForRequest } from "~/features.server";
-import { useFeatures } from "~/hooks/useFeatures";
-import { redirectWithSuccessMessage } from "~/models/message.server";
-import { createProject } from "~/models/project.server";
+import { redirectWithErrorMessage, redirectWithSuccessMessage } from "~/models/message.server";
+import { createProject, ExceededProjectLimitError } from "~/models/project.server";
 import { requireUserId } from "~/services/session.server";
 import {
+  newProjectPath,
   OrganizationParamsSchema,
   organizationPath,
-  v3ProjectPath,
   selectPlanPath,
+  v3ProjectPath,
 } from "~/utils/pathBuilder";
+import { generateVercelOAuthState } from "~/v3/vercel/vercelOAuthState.server";
 
 export async function loader({ params, request }: LoaderFunctionArgs) {
   const userId = await requireUserId(request);
@@ -101,6 +104,12 @@ export const action: ActionFunction = async ({ request, params }) => {
     return json(submission);
   }
 
+  // Check for Vercel integration params in URL
+  const url = new URL(request.url);
+  const code = url.searchParams.get("code");
+  const configurationId = url.searchParams.get("configurationId");
+  const next = url.searchParams.get("next");
+
   try {
     const project = await createProject({
       organizationSlug: organizationSlug,
@@ -109,13 +118,72 @@ export const action: ActionFunction = async ({ request, params }) => {
       version: submission.value.projectVersion,
     });
 
+    // If this is a Vercel integration flow, generate state and redirect to connect
+    if (code && configurationId) {
+      const environment = await prisma.runtimeEnvironment.findFirst({
+        where: {
+          projectId: project.id,
+          slug: "prod",
+          archivedAt: null,
+        },
+      });
+
+      if (!environment) {
+        return redirectWithErrorMessage(
+          newProjectPath({ slug: organizationSlug }),
+          request,
+          "Failed to find project environment."
+        );
+      }
+
+      const state = await generateVercelOAuthState({
+        organizationId: project.organization.id,
+        projectId: project.id,
+        environmentSlug: environment.slug,
+        organizationSlug: project.organization.slug,
+        projectSlug: project.slug,
+      });
+
+      const params = new URLSearchParams({
+        state,
+        code,
+        configurationId,
+        origin: "marketplace",
+      });
+      if (next) {
+        params.set("next", next);
+      }
+      return redirect(`/vercel/connect?${params.toString()}`);
+    }
+
     return redirectWithSuccessMessage(
       v3ProjectPath(project.organization, project),
       request,
       `${submission.value.projectName} created`
     );
-  } catch (error: any) {
-    return json({ errors: { body: error.message } }, { status: 400 });
+  } catch (error) {
+    if (error instanceof ExceededProjectLimitError) {
+      return redirectWithErrorMessage(
+        newProjectPath({ slug: organizationSlug }),
+        request,
+        error.message,
+        {
+          title: "Failed to create project",
+          action: {
+            label: "Request more projects",
+            variant: "secondary/small",
+            action: { type: "help", feedbackType: "help" },
+          },
+        }
+      );
+    }
+
+    return redirectWithErrorMessage(
+      newProjectPath({ slug: organizationSlug }),
+      request,
+      error instanceof Error ? error.message : "Something went wrong",
+      { ephemeral: false }
+    );
   }
 };
 
@@ -138,57 +206,62 @@ export default function Page() {
   const isLoading = navigation.state === "submitting" || navigation.state === "loading";
 
   return (
-    <MainCenteredContainer>
-      <div>
-        <FormTitle
-          LeadingIcon={<FolderIcon className="size-7 text-indigo-500" />}
-          title="Create a new project"
-          description={`This will create a new project in your "${organization.title}" organization.`}
-        />
-        <Form method="post" {...form.props}>
-          {message && (
-            <Callout variant="success" className="mb-4">
-              {message}
-            </Callout>
-          )}
-          <Fieldset>
-            <InputGroup>
-              <Label htmlFor={projectName.id}>Project name</Label>
-              <Input
-                {...conform.input(projectName, { type: "text" })}
-                placeholder="Your project name"
-                icon={FolderIcon}
-                autoFocus
-              />
-              <FormError id={projectName.errorId}>{projectName.error}</FormError>
-            </InputGroup>
-            {canCreateV3Projects ? (
-              <input {...conform.input(projectVersion, { type: "hidden" })} value={"v3"} />
-            ) : (
-              <input {...conform.input(projectVersion, { type: "hidden" })} value={"v2"} />
-            )}
-            <FormButtons
-              confirmButton={
-                <Button
-                  type="submit"
-                  variant={"primary/small"}
-                  disabled={isLoading}
-                  TrailingIcon={isLoading ? ButtonSpinner : undefined}
-                >
-                  {isLoading ? "Creating…" : "Create"}
-                </Button>
-              }
-              cancelButton={
-                organization.projectsCount > 0 ? (
-                  <LinkButton to={organizationPath(organization)} variant={"tertiary/small"}>
-                    Cancel
-                  </LinkButton>
-                ) : undefined
-              }
+    <AppContainer className="bg-charcoal-900">
+      <BackgroundWrapper>
+        <MainCenteredContainer className="max-w-[26rem] rounded-lg border border-grid-bright bg-background-dimmed p-5 shadow-lg">
+          <div>
+            <FormTitle
+              LeadingIcon={<FolderIcon className="size-7 text-indigo-500" />}
+              title="Create a new project"
+              description={`This will create a new project in your "${organization.title}" organization.`}
             />
-          </Fieldset>
-        </Form>
-      </div>
-    </MainCenteredContainer>
+            <Form method="post" {...form.props}>
+              {message && (
+                <Callout variant="success" className="mb-4">
+                  {message}
+                </Callout>
+              )}
+              <Fieldset>
+                <InputGroup>
+                  <Label htmlFor={projectName.id}>Project name</Label>
+                  <Input
+                    {...conform.input(projectName, { type: "text" })}
+                    placeholder="Your project name"
+                    icon={FolderIcon}
+                    autoFocus
+                  />
+                  <FormError id={projectName.errorId}>{projectName.error}</FormError>
+                </InputGroup>
+                {canCreateV3Projects ? (
+                  <input {...conform.input(projectVersion, { type: "hidden" })} value={"v3"} />
+                ) : (
+                  <input {...conform.input(projectVersion, { type: "hidden" })} value={"v2"} />
+                )}
+                <FormButtons
+                  confirmButton={
+                    <Button
+                      type="submit"
+                      variant={"primary/small"}
+                      disabled={isLoading}
+                      TrailingIcon={isLoading ? ButtonSpinner : undefined}
+                    >
+                      {isLoading ? "Creating…" : "Create"}
+                    </Button>
+                  }
+                  cancelButton={
+                    organization.projectsCount > 0 ? (
+                      <LinkButton to={organizationPath(organization)} variant={"secondary/small"}>
+                        Cancel
+                      </LinkButton>
+                    ) : undefined
+                  }
+                />
+              </Fieldset>
+            </Form>
+          </div>
+          <Feedback button={<></>} />
+        </MainCenteredContainer>
+      </BackgroundWrapper>
+    </AppContainer>
   );
 }

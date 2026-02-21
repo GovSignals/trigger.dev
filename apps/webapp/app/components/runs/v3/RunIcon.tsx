@@ -4,6 +4,7 @@ import {
   InformationCircleIcon,
   RectangleStackIcon,
   Squares2X2Icon,
+  TableCellsIcon,
   TagIcon,
 } from "@heroicons/react/20/solid";
 import { AttemptIcon } from "~/assets/icons/AttemptIcon";
@@ -20,6 +21,7 @@ import { TriggerIcon } from "~/assets/icons/TriggerIcon";
 import { PythonLogoIcon } from "~/assets/icons/PythonLogoIcon";
 import { TraceIcon } from "~/assets/icons/TraceIcon";
 import { WaitpointTokenIcon } from "~/assets/icons/WaitpointTokenIcon";
+import { StreamsIcon } from "~/assets/icons/StreamsIcon";
 
 type TaskIconProps = {
   name: string | undefined;
@@ -46,8 +48,6 @@ export function RunIcon({ name, className, spanName }: TaskIconProps) {
     ) {
       return <TablerIcon name={spanNameIcon.iconName} className={className} />;
     }
-
-    <InformationCircleIcon className={cn(className, "text-text-dimmed")} />;
   }
 
   if (!name) return <Squares2X2Icon className={cn(className, "text-text-dimmed")} />;
@@ -80,6 +80,8 @@ export function RunIcon({ name, className, spanName }: TaskIconProps) {
       return <WaitpointTokenIcon className={cn(className, "text-sky-500")} />;
     case "function":
       return <FunctionIcon className={cn(className, "text-text-dimmed")} />;
+    case "query":
+      return <TableCellsIcon className={cn(className, "text-query")} />;
     //log levels
     case "debug":
     case "log":
@@ -97,6 +99,7 @@ export function RunIcon({ name, className, spanName }: TaskIconProps) {
       return <RunFunctionIcon className={cn(className, "text-text-dimmed")} />;
     case "task-hook-init":
     case "task-hook-onStart":
+    case "task-hook-onStartAttempt":
     case "task-hook-onSuccess":
     case "task-hook-onWait":
     case "task-hook-onResume":
@@ -107,6 +110,8 @@ export function RunIcon({ name, className, spanName }: TaskIconProps) {
     case "task-hook-onFailure":
     case "task-hook-catchError":
       return <FunctionIcon className={cn(className, "text-error")} />;
+    case "streams":
+      return <StreamsIcon className={cn(className, "text-text-dimmed")} />;
   }
 
   return <InformationCircleIcon className={cn(className, "text-text-dimmed")} />;

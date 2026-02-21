@@ -1,6 +1,6 @@
 import { Context, ROOT_CONTEXT, Span, SpanKind, context, trace } from "@opentelemetry/api";
 import {
-  TaskRunExecution,
+  V3TaskRunExecution,
   TaskRunExecutionLazyAttemptPayload,
   TaskRunExecutionResult,
   TaskRunFailedExecutionResult,
@@ -139,7 +139,7 @@ export class DevQueueConsumer {
   public async taskAttemptCompleted(
     workerId: string,
     completion: TaskRunExecutionResult,
-    execution: TaskRunExecution
+    execution: V3TaskRunExecution
   ) {
     if (completion.ok) {
       this._taskSuccesses++;

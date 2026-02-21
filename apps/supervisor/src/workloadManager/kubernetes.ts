@@ -4,7 +4,13 @@ import {
   type WorkloadManagerCreateOptions,
   type WorkloadManagerOptions,
 } from "./types.js";
-import type { EnvironmentType, MachinePreset } from "@trigger.dev/core/v3";
+import type {
+  EnvironmentType,
+  MachinePreset,
+  MachinePresetName,
+  PlacementTag,
+} from "@trigger.dev/core/v3";
+import { PlacementTagProcessor } from "@trigger.dev/core/v3/serverOnly";
 import { env } from "../env.js";
 import { type K8sApi, createK8sApi, type k8s } from "../clients/kubernetes.js";
 import { getRunnerId } from "../util.js";
@@ -13,19 +19,84 @@ type ResourceQuantities = {
   [K in "cpu" | "memory" | "ephemeral-storage"]?: string;
 };
 
+const cpuRequestRatioByMachinePreset: Record<MachinePresetName, number | undefined> = {
+  micro: env.KUBERNETES_CPU_REQUEST_RATIO_MICRO,
+  "small-1x": env.KUBERNETES_CPU_REQUEST_RATIO_SMALL_1X,
+  "small-2x": env.KUBERNETES_CPU_REQUEST_RATIO_SMALL_2X,
+  "medium-1x": env.KUBERNETES_CPU_REQUEST_RATIO_MEDIUM_1X,
+  "medium-2x": env.KUBERNETES_CPU_REQUEST_RATIO_MEDIUM_2X,
+  "large-1x": env.KUBERNETES_CPU_REQUEST_RATIO_LARGE_1X,
+  "large-2x": env.KUBERNETES_CPU_REQUEST_RATIO_LARGE_2X,
+};
+
+const memoryRequestRatioByMachinePreset: Record<MachinePresetName, number | undefined> = {
+  micro: env.KUBERNETES_MEMORY_REQUEST_RATIO_MICRO,
+  "small-1x": env.KUBERNETES_MEMORY_REQUEST_RATIO_SMALL_1X,
+  "small-2x": env.KUBERNETES_MEMORY_REQUEST_RATIO_SMALL_2X,
+  "medium-1x": env.KUBERNETES_MEMORY_REQUEST_RATIO_MEDIUM_1X,
+  "medium-2x": env.KUBERNETES_MEMORY_REQUEST_RATIO_MEDIUM_2X,
+  "large-1x": env.KUBERNETES_MEMORY_REQUEST_RATIO_LARGE_1X,
+  "large-2x": env.KUBERNETES_MEMORY_REQUEST_RATIO_LARGE_2X,
+};
+
 export class KubernetesWorkloadManager implements WorkloadManager {
   private readonly logger = new SimpleStructuredLogger("kubernetes-workload-provider");
   private k8s: K8sApi;
   private namespace = env.KUBERNETES_NAMESPACE;
+  private placementTagProcessor: PlacementTagProcessor;
+
+  // Resource settings
+  private readonly cpuRequestMinCores = env.KUBERNETES_CPU_REQUEST_MIN_CORES;
+  private readonly cpuRequestRatio = env.KUBERNETES_CPU_REQUEST_RATIO;
+  private readonly memoryRequestMinGb = env.KUBERNETES_MEMORY_REQUEST_MIN_GB;
+  private readonly memoryRequestRatio = env.KUBERNETES_MEMORY_REQUEST_RATIO;
+  private readonly memoryOverheadGb = env.KUBERNETES_MEMORY_OVERHEAD_GB;
 
   constructor(private opts: WorkloadManagerOptions) {
     this.k8s = createK8sApi();
+    this.placementTagProcessor = new PlacementTagProcessor({
+      enabled: env.PLACEMENT_TAGS_ENABLED,
+      prefix: env.PLACEMENT_TAGS_PREFIX,
+    });
 
     if (opts.workloadApiDomain) {
       this.logger.warn("[KubernetesWorkloadManager] ⚠️ Custom workload API domain", {
         domain: opts.workloadApiDomain,
       });
     }
+  }
+
+  private addPlacementTags(
+    podSpec: Omit<k8s.V1PodSpec, "containers">,
+    placementTags?: PlacementTag[]
+  ): Omit<k8s.V1PodSpec, "containers"> {
+    const nodeSelector = this.placementTagProcessor.convertToNodeSelector(
+      placementTags,
+      podSpec.nodeSelector
+    );
+
+    return {
+      ...podSpec,
+      nodeSelector,
+    };
+  }
+
+  private stripImageDigest(imageRef: string): string {
+    if (!env.KUBERNETES_STRIP_IMAGE_DIGEST) {
+      return imageRef;
+    }
+
+    const atIndex = imageRef.lastIndexOf("@");
+
+    if (atIndex === -1) {
+      return imageRef;
+    }
+
+    return imageRef.substring(0, atIndex);
+  }
+
+  private clamp(value: number, min: number, max: number): number {
+    return Math.min(Math.max(value, min), max);
   }
 
   async create(opts: WorkloadManagerCreateOptions) {
@@ -51,12 +122,13 @@ export class KubernetesWorkloadManager implements WorkloadManager {
             },
           },
           spec: {
-            ...this.#defaultPodSpec,
+            ...this.addPlacementTags(this.#defaultPodSpec, opts.placementTags),
+            affinity: this.#getAffinity(opts.machine, opts.projectId),
             terminationGracePeriodSeconds: 60 * 60,
             containers: [
               {
                 name: "run-controller",
-                image: opts.image,
+                image: this.stripImageDigest(opts.image),
                 ports: [
                   {
                     containerPort: 8000,
@@ -87,6 +159,14 @@ export class KubernetesWorkloadManager implements WorkloadManager {
                   {
                     name: "TRIGGER_ENV_ID",
                     value: opts.envId,
+                  },
+                  {
+                    name: "TRIGGER_DEPLOYMENT_ID",
+                    value: opts.deploymentFriendlyId,
+                  },
+                  {
+                    name: "TRIGGER_DEPLOYMENT_VERSION",
+                    value: opts.deploymentVersion,
                   },
                   {
                     name: "TRIGGER_SNAPSHOT_ID",
@@ -240,9 +320,13 @@ export class KubernetesWorkloadManager implements WorkloadManager {
       // Explicit control over service account token mounting (defaults to false for security)
       automountServiceAccountToken: env.KUBERNETES_WORKER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN,
       imagePullSecrets: this.getImagePullSecrets(),
-      // Optionally specify a service account for the worker pods
       ...(env.KUBERNETES_WORKER_SERVICE_ACCOUNT
         ? { serviceAccountName: env.KUBERNETES_WORKER_SERVICE_ACCOUNT }
+        : {}),
+      ...(env.KUBERNETES_SCHEDULER_NAME
+        ? {
+            schedulerName: env.KUBERNETES_SCHEDULER_NAME,
+          }
         : {}),
       securityContext: {
         runAsNonRoot: true,
@@ -277,20 +361,35 @@ export class KubernetesWorkloadManager implements WorkloadManager {
       envtype: this.#envTypeToLabelValue(opts.envType),
       org: opts.orgId,
       project: opts.projectId,
+      machine: opts.machine.name,
     };
   }
 
   #getResourceRequestsForMachine(preset: MachinePreset): ResourceQuantities {
+    const cpuRatio = cpuRequestRatioByMachinePreset[preset.name] ?? this.cpuRequestRatio;
+    const memoryRatio = memoryRequestRatioByMachinePreset[preset.name] ?? this.memoryRequestRatio;
+
+    const cpuRequest = preset.cpu * cpuRatio;
+    const memoryRequest = preset.memory * memoryRatio;
+
+    // Clamp between min and max
+    const clampedCpu = this.clamp(cpuRequest, this.cpuRequestMinCores, preset.cpu);
+    const clampedMemory = this.clamp(memoryRequest, this.memoryRequestMinGb, preset.memory);
+
     return {
-      cpu: `${preset.cpu * 0.75}`,
-      memory: `${preset.memory}G`,
+      cpu: `${clampedCpu}`,
+      memory: `${clampedMemory}G`,
     };
   }
 
   #getResourceLimitsForMachine(preset: MachinePreset): ResourceQuantities {
+    const memoryLimit = this.memoryOverheadGb
+      ? preset.memory + this.memoryOverheadGb
+      : preset.memory;
+
     return {
       cpu: `${preset.cpu}`,
-      memory: `${preset.memory}G`,
+      memory: `${memoryLimit}G`,
     };
   }
 
@@ -304,6 +403,93 @@ export class KubernetesWorkloadManager implements WorkloadManager {
         ...this.#defaultResourceLimits,
         ...this.#getResourceLimitsForMachine(preset),
       },
+    };
+  }
+
+  #isLargeMachine(preset: MachinePreset): boolean {
+    return preset.name.startsWith("large-");
+  }
+
+  #getAffinity(preset: MachinePreset, projectId: string): k8s.V1Affinity | undefined {
+    const nodeAffinity = this.#getNodeAffinityRules(preset);
+    const podAffinity = this.#getProjectPodAffinity(projectId);
+
+    if (!nodeAffinity && !podAffinity) {
+      return undefined;
+    }
+
+    return {
+      ...(nodeAffinity && { nodeAffinity }),
+      ...(podAffinity && { podAffinity }),
+    };
+  }
+
+  #getNodeAffinityRules(preset: MachinePreset): k8s.V1NodeAffinity | undefined {
+    if (!env.KUBERNETES_LARGE_MACHINE_POOL_LABEL) {
+      return undefined;
+    }
+
+    if (this.#isLargeMachine(preset)) {
+      // soft preference for the large-machine pool, falls back to standard if unavailable
+      return {
+        preferredDuringSchedulingIgnoredDuringExecution: [
+          {
+            weight: 100,
+            preference: {
+              matchExpressions: [
+                {
+                  key: "node.cluster.x-k8s.io/machinepool",
+                  operator: "In",
+                  values: [env.KUBERNETES_LARGE_MACHINE_POOL_LABEL],
+                },
+              ],
+            },
+          },
+        ],
+      };
+    }
+
+    // not schedulable in the large-machine pool
+    return {
+      requiredDuringSchedulingIgnoredDuringExecution: {
+        nodeSelectorTerms: [
+          {
+            matchExpressions: [
+              {
+                key: "node.cluster.x-k8s.io/machinepool",
+                operator: "NotIn",
+                values: [env.KUBERNETES_LARGE_MACHINE_POOL_LABEL],
+              },
+            ],
+          },
+        ],
+      },
+    };
+  }
+
+  #getProjectPodAffinity(projectId: string): k8s.V1PodAffinity | undefined {
+    if (!env.KUBERNETES_PROJECT_AFFINITY_ENABLED) {
+      return undefined;
+    }
+
+    return {
+      preferredDuringSchedulingIgnoredDuringExecution: [
+        {
+          weight: env.KUBERNETES_PROJECT_AFFINITY_WEIGHT,
+          podAffinityTerm: {
+            labelSelector: {
+              matchExpressions: [
+                {
+                  key: "project",
+                  operator: "In",
+                  values: [projectId],
+                },
+              ],
+            },
+            topologyKey: env.KUBERNETES_PROJECT_AFFINITY_TOPOLOGY_KEY,
+          },
+        },
+      ],
     };
   }
 }

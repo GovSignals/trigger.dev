@@ -8,6 +8,7 @@ import { motion } from "framer-motion";
 import { forwardRef, useState } from "react";
 import { z } from "zod";
 import { AppContainer, MainCenteredContainer } from "~/components/layout/AppLayout";
+import { BackgroundWrapper } from "~/components/BackgroundWrapper";
 import { Button } from "~/components/primitives/Buttons";
 import { Fieldset } from "~/components/primitives/Fieldset";
 import { FormButtons } from "~/components/primitives/FormButtons";
@@ -24,6 +25,7 @@ import { redirectWithSuccessMessage } from "~/models/message.server";
 import { updateUser } from "~/models/user.server";
 import { requireUserId } from "~/services/session.server";
 import { rootPath } from "~/utils/pathBuilder";
+import { getVercelInstallParams } from "~/v3/vercel";
 
 function createSchema(
   constraints: {
@@ -104,7 +106,24 @@ export const action: ActionFunction = async ({ request }) => {
       referralSource: submission.value.referralSource,
     });
 
-    return redirectWithSuccessMessage(rootPath(), request, "Your details have been updated.");
+    // Preserve Vercel integration params if present
+    const vercelParams = getVercelInstallParams(request);
+    let redirectUrl = rootPath();
+
+    if (vercelParams) {
+      // Redirect to orgs/new with params preserved
+      const params = new URLSearchParams({
+        code: vercelParams.code,
+        configurationId: vercelParams.configurationId,
+        integration: "vercel",
+      });
+      if (vercelParams.next) {
+        params.set("next", vercelParams.next);
+      }
+      redirectUrl = `/orgs/new?${params.toString()}`;
+    }
+
+    return redirectWithSuccessMessage(redirectUrl, request, "Your details have been updated.");
   } catch (error: any) {
     return json({ errors: { body: error.message } }, { status: 400 });
   }
@@ -113,7 +132,7 @@ export const action: ActionFunction = async ({ request }) => {
 const HandIcon = forwardRef<HTMLDivElement, {}>(({}, ref) => {
   return (
     <div ref={ref}>
-      <HandRaisedIcon className="h-7 w-7 text-amber-300" />
+      <HandRaisedIcon className="h-7 w-7 text-amber-400" />
     </div>
   );
 });
@@ -138,107 +157,107 @@ export default function Page() {
   const shouldShowConfirm = user.email !== enteredEmail || user.email === "";
 
   return (
-    <AppContainer>
-      <MainCenteredContainer className="max-w-[22rem]">
-        <Form method="post" {...form.props}>
-          <FormTitle
-            title="Welcome to Trigger.dev"
-            LeadingIcon={
-              <MotionHand
-                style={{
-                  originY: 0.75,
-                }}
-                initial={{
-                  rotate: 0,
-                }}
-                animate={{
-                  rotate: [0, -20, 0, 20, 0, -20, 0, 20, 0],
-                }}
-                transition={{
-                  delay: 1,
-                  duration: 1,
-                  repeatDelay: 5,
-                  repeat: Infinity,
-                  ease: "linear",
-                }}
-              />
-            }
-            description="We just need you to confirm a couple of details, it'll only take a minute."
-          />
-          <Fieldset>
-            <InputGroup>
-              <Label htmlFor={name.id}>Full name</Label>
-              <Input
-                {...conform.input(name, { type: "text" })}
-                defaultValue={user.name ?? ""}
-                placeholder="Your full name"
-                icon={UserIcon}
-                autoFocus
-              />
-              <Hint>Your team will see this name and we'll use it if we need to contact you.</Hint>
-              <FormError id={name.errorId}>{name.error}</FormError>
-            </InputGroup>
-            <InputGroup>
-              <Label htmlFor={email.id}>Email</Label>
-              <Input
-                {...conform.input(email, { type: "email" })}
-                defaultValue={enteredEmail}
-                onChange={(e) => {
-                  setEnteredEmail(e.target.value);
-                }}
-                placeholder="Your email address"
-                icon={EnvelopeIcon}
-                spellCheck={false}
-              />
-              {!shouldShowConfirm && (
-                <Hint>
-                  Check this is the email you'd like associated with your Trigger.dev account.
-                </Hint>
-              )}
-              <FormError id={email.errorId}>{email.error}</FormError>
-            </InputGroup>
-
-            {shouldShowConfirm ? (
+    <AppContainer className="bg-charcoal-900">
+      <BackgroundWrapper>
+        <MainCenteredContainer className="max-w-[26rem] rounded-lg border border-grid-bright bg-background-dimmed p-5 shadow-lg">
+          <Form method="post" {...form.props}>
+            <FormTitle
+              title="Welcome to Trigger.dev"
+              LeadingIcon={
+                <MotionHand
+                  style={{
+                    originY: 0.75,
+                  }}
+                  initial={{
+                    rotate: 0,
+                  }}
+                  animate={{
+                    rotate: [0, -20, 0, 20, 0, -20, 0, 20, 0],
+                  }}
+                  transition={{
+                    delay: 1,
+                    duration: 1,
+                    repeatDelay: 5,
+                    repeat: Infinity,
+                    ease: "linear",
+                  }}
+                />
+              }
+              description="We just need you to confirm a couple of details."
+            />
+            <Fieldset>
               <InputGroup>
-                <Label htmlFor={confirmEmail.id}>Confirm email</Label>
+                <Label htmlFor={name.id}>Full name</Label>
                 <Input
-                  {...conform.input(confirmEmail, { type: "email" })}
-                  placeholder="Your email, again"
+                  {...conform.input(name, { type: "text" })}
+                  defaultValue={user.name ?? ""}
+                  placeholder="Your full name"
+                  icon={UserIcon}
+                  autoFocus
+                />
+                <Hint>Your team will see this name and we'll use it to contact you.</Hint>
+                <FormError id={name.errorId}>{name.error}</FormError>
+              </InputGroup>
+              <InputGroup>
+                <Label htmlFor={email.id}>Email</Label>
+                <Input
+                  {...conform.input(email, { type: "email" })}
+                  defaultValue={enteredEmail}
+                  onChange={(e) => {
+                    setEnteredEmail(e.target.value);
+                  }}
+                  placeholder="Your email address"
                   icon={EnvelopeIcon}
                   spellCheck={false}
                 />
-                <Hint>
-                  Check this is the email you'd like associated with your Trigger.dev account.
-                </Hint>
-                <FormError id={confirmEmail.errorId}>{confirmEmail.error}</FormError>
+                {!shouldShowConfirm && (
+                  <Hint>Confirm this is the email you'd like for your Trigger.dev account.</Hint>
+                )}
+                <FormError id={email.errorId}>{email.error}</FormError>
               </InputGroup>
-            ) : (
-              <>
-                <input {...conform.input(confirmEmail, { type: "hidden" })} value={user.email} />
-              </>
-            )}
-            {isManagedCloud && (
-              <InputGroup>
-                <Label htmlFor={confirmEmail.id}>How did you hear about us?</Label>
-                <Input
-                  {...conform.input(referralSource, { type: "text" })}
-                  placeholder="Google, X (Twitter)…?"
-                  icon={HeartIcon}
-                  spellCheck={false}
-                />
-              </InputGroup>
-            )}
 
-            <FormButtons
-              confirmButton={
-                <Button type="submit" variant={"primary/small"} TrailingIcon={ArrowRightIcon}>
-                  Continue
-                </Button>
-              }
-            />
-          </Fieldset>
-        </Form>
-      </MainCenteredContainer>
+              {shouldShowConfirm ? (
+                <InputGroup>
+                  <Label htmlFor={confirmEmail.id}>Confirm email</Label>
+                  <Input
+                    {...conform.input(confirmEmail, { type: "email" })}
+                    placeholder="Your email, again"
+                    icon={EnvelopeIcon}
+                    spellCheck={false}
+                  />
+                  <Hint>
+                    Check this is the email you'd like associated with your Trigger.dev account.
+                  </Hint>
+                  <FormError id={confirmEmail.errorId}>{confirmEmail.error}</FormError>
+                </InputGroup>
+              ) : (
+                <>
+                  <input {...conform.input(confirmEmail, { type: "hidden" })} value={user.email} />
+                </>
+              )}
+              {isManagedCloud && (
+                <InputGroup>
+                  <Label htmlFor={confirmEmail.id}>How did you hear about us?</Label>
+                  <Input
+                    {...conform.input(referralSource, { type: "text" })}
+                    placeholder="LLM, Google, X (Twitter)…?"
+                    icon={HeartIcon}
+                    spellCheck={false}
+                  />
+                </InputGroup>
+              )}
+
+              <FormButtons
+                confirmButton={
+                  <Button type="submit" variant={"primary/small"} TrailingIcon={ArrowRightIcon}>
+                    Continue
+                  </Button>
+                }
+              />
+            </Fieldset>
+          </Form>
+        </MainCenteredContainer>
+      </BackgroundWrapper>
     </AppContainer>
   );
 }

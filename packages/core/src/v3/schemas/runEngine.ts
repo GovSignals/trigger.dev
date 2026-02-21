@@ -13,6 +13,7 @@ export const TaskRunExecutionStatus = {
   SUSPENDED: "SUSPENDED",
   PENDING_CANCEL: "PENDING_CANCEL",
   FINISHED: "FINISHED",
+  DELAYED: "DELAYED",
 } satisfies Enum<DB_TYPES.TaskRunExecutionStatus>;
 
 export type TaskRunExecutionStatus =
@@ -118,6 +119,7 @@ const BaseRunMetadata = z.object({
   friendlyId: z.string(),
   status: z.enum(Object.values(TaskRunStatus) as [TaskRunStatus]),
   attemptNumber: z.number().nullish(),
+  taskEventStore: z.string().optional(),
 });
 
 export const ExecutionResult = z.object({
@@ -224,11 +226,18 @@ export const DequeueMessageCheckpoint = z.object({
 });
 export type DequeueMessageCheckpoint = z.infer<typeof DequeueMessageCheckpoint>;
 
+export const PlacementTag = z.object({
+  key: z.string(),
+  values: z.array(z.string()).optional(),
+});
+export type PlacementTag = z.infer<typeof PlacementTag>;
+
 /** This is sent to a Worker when a run is dequeued (a new run or continuing run) */
 export const DequeuedMessage = z.object({
   version: z.literal("1"),
   snapshot: ExecutionSnapshot,
   dequeuedAt: z.coerce.date(),
+  workerQueueLength: z.number().optional(),
   image: z.string().optional(),
   checkpoint: DequeueMessageCheckpoint.optional(),
   completedWaitpoints: z.array(CompletedWaitpoint),
@@ -261,5 +270,6 @@ export const DequeuedMessage = z.object({
   project: z.object({
     id: z.string(),
   }),
+  placementTags: z.array(PlacementTag).optional(),
 });
 export type DequeuedMessage = z.infer<typeof DequeuedMessage>;

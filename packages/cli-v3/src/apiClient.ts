@@ -1,5 +1,7 @@
 import {
   CreateAuthorizationCodeResponseSchema,
+  CreateArtifactRequestBody,
+  CreateArtifactResponseBody,
   CreateBackgroundWorkerRequestBody,
   CreateBackgroundWorkerResponse,
   DevConfigResponseBody,
@@ -22,7 +24,6 @@ import {
   PromoteDeploymentResponseBody,
   StartDeploymentIndexingRequestBody,
   StartDeploymentIndexingResponseBody,
-  TaskRunExecution,
   TriggerTaskRequestBody,
   TriggerTaskResponse,
   UpsertBranchRequestBody,
@@ -31,6 +32,14 @@ import {
   WorkersCreateRequestBody,
   WorkersCreateResponseBody,
   WorkersListResponseBody,
+  CreateProjectRequestBody,
+  GetOrgsResponseBody,
+  GetWorkerByTagResponse,
+  GetJWTRequestBody,
+  GetJWTResponse,
+  ApiBranchListResponseBody,
+  GenerateRegistryCredentialsResponseBody,
+  RemoteBuildProviderStatusResponseBody,
 } from "@trigger.dev/core/v3";
 import {
   WorkloadDebugLogRequestBody,
@@ -45,6 +54,7 @@ import { ApiResult, wrapZodFetch, zodfetchSSE } from "@trigger.dev/core/v3/zodfe
 import { EventSource } from "eventsource";
 import { z } from "zod";
 import { logger } from "./utilities/logger.js";
+import { VERSION } from "./version.js";
 
 export class CliApiClient {
   private engineURL: string;
@@ -136,6 +146,75 @@ export class CliApiClient {
     });
   }
 
+  async getOrgs() {
+    if (!this.accessToken) {
+      throw new Error("getOrgs: No access token");
+    }
+
+    return wrapZodFetch(GetOrgsResponseBody, `${this.apiURL}/api/v1/orgs`, {
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+  }
+
+  async createProject(orgParam: string, body: CreateProjectRequestBody) {
+    if (!this.accessToken) {
+      throw new Error("createProject: No access token");
+    }
+
+    return wrapZodFetch(GetProjectResponseBody, `${this.apiURL}/api/v1/orgs/${orgParam}/projects`, {
+      method: "POST",
+      headers: this.getHeaders(),
+      body: JSON.stringify(body),
+    });
+  }
+
+  async getWorkerByTag(projectRef: string, envName: string, tagName: string = "current") {
+    if (!this.accessToken) {
+      throw new Error("getWorkerByTag: No access token");
+    }
+
+    return wrapZodFetch(
+      GetWorkerByTagResponse,
+      `${this.apiURL}/api/v1/projects/${projectRef}/${envName}/workers/${tagName}`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+  }
+
+  async getJWT(projectRef: string, envName: string, body: GetJWTRequestBody) {
+    if (!this.accessToken) {
+      throw new Error("getJWT: No access token");
+    }
+
+    return wrapZodFetch(
+      GetJWTResponse,
+      `${this.apiURL}/api/v1/projects/${projectRef}/${envName}/jwt`,
+      {
+        method: "POST",
+        headers: this.getHeaders(),
+        body: JSON.stringify(body),
+      }
+    );
+  }
+
+  async getDevStatus(projectRef: string) {
+    if (!this.accessToken) {
+      throw new Error("getDevStatus: No access token");
+    }
+
+    return wrapZodFetch(
+      z.object({ isConnected: z.boolean() }),
+      `${this.apiURL}/api/v1/projects/${projectRef}/dev-status`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+  }
+
   async createBackgroundWorker(projectRef: string, body: CreateBackgroundWorkerRequestBody) {
     if (!this.accessToken) {
       throw new Error("createBackgroundWorker: No access token");
@@ -204,6 +283,20 @@ export class CliApiClient {
     );
   }
 
+  async listBranches(projectRef: string) {
+    if (!this.accessToken) {
+      throw new Error("listBranches: No access token");
+    }
+
+    return wrapZodFetch(
+      ApiBranchListResponseBody,
+      `${this.apiURL}/api/v1/projects/${projectRef}/branches`,
+      {
+        headers: this.getHeaders(),
+      }
+    );
+  }
+
   async getEnvironmentVariables(projectRef: string) {
     if (!this.accessToken) {
       throw new Error("getEnvironmentVariables: No access token");
@@ -236,6 +329,49 @@ export class CliApiClient {
         body: JSON.stringify(params),
       }
     );
+  }
+
+  async getRemoteBuildProviderStatus() {
+    return wrapZodFetch(
+      RemoteBuildProviderStatusResponseBody,
+      `${this.apiURL}/api/v1/remote-build-provider-status`,
+      {
+        method: "GET",
+        headers: {
+          ...this.getHeaders(),
+          // probably a good idea to add this to the other requests too
+          "x-trigger-cli-version": VERSION,
+        },
+      }
+    );
+  }
+
+  async generateRegistryCredentials(deploymentId: string) {
+    if (!this.accessToken) {
+      throw new Error("generateRegistryCredentials: No access token");
+    }
+
+    return wrapZodFetch(
+      GenerateRegistryCredentialsResponseBody,
+      `${this.apiURL}/api/v1/deployments/${deploymentId}/generate-registry-credentials`,
+      {
+        method: "POST",
+        headers: this.getHeaders(),
+        body: "{}",
+      }
+    );
+  }
+
+  async createArtifact(body: CreateArtifactRequestBody) {
+    if (!this.accessToken) {
+      throw new Error("createArtifact: No access token");
+    }
+
+    return wrapZodFetch(CreateArtifactResponseBody, `${this.apiURL}/api/v1/artifacts`, {
+      method: "POST",
+      headers: this.getHeaders(),
+      body: JSON.stringify(body),
+    });
   }
 
   async initializeDeployment(body: InitializeDeploymentRequestBody) {

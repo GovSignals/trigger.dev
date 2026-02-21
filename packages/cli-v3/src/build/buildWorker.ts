@@ -12,12 +12,13 @@ import { join, relative, sep } from "node:path";
 import { generateContainerfile } from "../deploy/buildImage.js";
 import { writeFile } from "node:fs/promises";
 import { buildManifestToJSON } from "../utilities/buildManifest.js";
-import { readPackageJSON, writePackageJSON } from "pkg-types";
+import { readPackageJSON } from "pkg-types";
 import { writeJSONFile } from "../utilities/fileSystem.js";
 import { isWindows } from "std-env";
 import { pathToFileURL } from "node:url";
 import { logger } from "../utilities/logger.js";
 import { SdkVersionExtractor } from "./plugins.js";
+import { spinner } from "../utilities/windows.js";
 
 export type BuildWorkerEventListener = {
   onBundleStart?: () => void;
@@ -36,6 +37,7 @@ export type BuildWorkerOptions = {
   forcedExternals?: string[];
   baseImageNode?: string;
   containerfileModule?: string;
+  plain?: boolean;
 };
 
 export async function buildWorker(options: BuildWorkerOptions) {
@@ -50,7 +52,21 @@ export async function buildWorker(options: BuildWorkerOptions) {
     resolvedConfig,
     options.forcedExternals
   );
-  const buildContext = createBuildContext(options.target, resolvedConfig);
+  const buildContext = createBuildContext(options.target, resolvedConfig, {
+    logger: options.plain
+      ? {
+          debug: (...args) => console.log(...args),
+          log: (...args) => console.log(...args),
+          warn: (...args) => console.log(...args),
+          progress: (message) => console.log(message),
+          spinner: (message) => {
+            const $spinner = spinner({ plain: true });
+            $spinner.start(message);
+            return $spinner;
+          },
+        }
+      : undefined,
+  });
   buildContext.prependExtension(externalsExtension);
   await notifyExtensionOnBuildStart(buildContext);
   const pluginsFromExtensions = resolvePluginsForContext(buildContext);
@@ -184,17 +200,21 @@ async function writeDeployFiles({
     ) ?? {};
 
   // Step 3: Write the resolved dependencies to the package.json file
-  await writePackageJSON(join(outputPath, "package.json"), {
-    ...packageJson,
-    name: packageJson.name ?? "trigger-project",
-    dependencies: {
-      ...dependencies,
+  await writeJSONFile(
+    join(outputPath, "package.json"),
+    {
+      ...packageJson,
+      name: packageJson.name ?? "trigger-project",
+      dependencies: {
+        ...dependencies,
+      },
+      trustedDependencies: Object.keys(dependencies).sort(),
+      devDependencies: {},
+      peerDependencies: {},
+      scripts: {},
     },
-    trustedDependencies: Object.keys(dependencies),
-    devDependencies: {},
-    peerDependencies: {},
-    scripts: {},
-  });
+    true
+  );
 
   await writeJSONFile(join(outputPath, "build.json"), buildManifestToJSON(buildManifest));
   await writeJSONFile(join(outputPath, "metafile.json"), bundleResult.metafile);

@@ -22,6 +22,7 @@ import { FailedTaskRunService } from "../failedTaskRun.server";
 import { CancelDevSessionRunsService } from "../services/cancelDevSessionRuns.server";
 import { CompleteAttemptService } from "../services/completeAttempt.server";
 import { attributesFromAuthenticatedEnv, tracer } from "../tracer.server";
+import { compareDeploymentVersions } from "../utils/deploymentVersions";
 import { DevSubscriber, devPubSub } from "./devPubSub.server";
 
 const MessageBody = z.discriminatedUnion("type", [
@@ -590,7 +591,7 @@ export class DevQueueConsumer {
   }
 
   // Get the latest background worker based on the version.
-  // Versions are in the format of 20240101.1 and 20240101.2, or even 20240101.10, 20240101.11, etc.
+  // Versions are in the format of YYYYMMDD.N (e.g., 20240101.1) with optional suffix (e.g., 20240101.1-hardened)
   #getLatestBackgroundWorker() {
     const workers = Array.from(this._backgroundWorkers.values());
 
@@ -599,22 +600,10 @@ export class DevQueueConsumer {
     }
 
     return workers.reduce((acc, curr) => {
-      const accParts = acc.version.split(".").map(Number);
-      const currParts = curr.version.split(".").map(Number);
-
-      // Compare the major part
-      if (accParts[0] < currParts[0]) {
-        return curr;
-      } else if (accParts[0] > currParts[0]) {
-        return acc;
-      }
-
-      // Compare the minor part (assuming all versions have two parts)
-      if (accParts[1] < currParts[1]) {
-        return curr;
-      } else {
-        return acc;
-      }
+      // Use compareDeploymentVersions to properly handle versions with suffixes
+      const comparison = compareDeploymentVersions(acc.version, curr.version);
+      // If curr is newer (comparison returns -1), use curr, otherwise use acc
+      return comparison < 0 ? curr : acc;
     });
   }
 }

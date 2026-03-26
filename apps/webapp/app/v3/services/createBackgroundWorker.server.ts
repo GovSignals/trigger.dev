@@ -10,6 +10,7 @@ import { BackgroundWorkerId, stringifyDuration } from "@trigger.dev/core/v3/isom
 import type { BackgroundWorker, TaskQueue, TaskQueueType } from "@trigger.dev/database";
 import cronstrue from "cronstrue";
 import { $transaction, Prisma, PrismaClientOrTransaction } from "~/db.server";
+import { env } from "~/env.server";
 import { sanitizeQueueName } from "~/models/taskQueue.server";
 import { AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
@@ -66,7 +67,7 @@ export class CreateBackgroundWorkerService extends BaseService {
         return latestBackgroundWorker;
       }
 
-      const nextVersion = calculateNextBuildVersion(project.backgroundWorkers[0]?.version);
+      const nextVersion = calculateNextBuildVersion(project.backgroundWorkers[0]?.version, env.DEPLOY_VERSION_SUFFIX);
 
       logger.debug(`Creating background worker`, {
         nextVersion,

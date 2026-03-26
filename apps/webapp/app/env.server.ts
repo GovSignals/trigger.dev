@@ -339,6 +339,7 @@ const EnvironmentSchema = z
     COMPUTE_TEMPLATE_SHADOW_ROLLOUT_PCT: z.string().optional(),
 
     DEPLOY_IMAGE_PLATFORM: z.string().default("linux/amd64"),
+    DEPLOY_VERSION_SUFFIX: z.string().optional(),
     DEPLOY_TIMEOUT_MS: z.coerce
       .number()
       .int()

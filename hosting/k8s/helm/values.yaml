@@ -282,6 +282,8 @@ supervisor:
       forceEnabled: true
       namespace: "" # Default: uses release namespace
       workerNodetypeLabel: "" # When set, runs will only be scheduled on nodes with "nodetype=<label>"
+      workerServiceAccount: "trigger-worker" # Service account name for worker pods (e.g. "trigger-worker")
+      workerAutomountServiceAccountToken: true # Whether to mount the SA token in worker pods. Keep false unless pods need K8s API access
       ephemeralStorageSizeLimit: "" # Default: 10Gi
       ephemeralStorageSizeRequest: "" # Default: 2Gi´
     podCleaner:
@@ -374,6 +376,18 @@ supervisor:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+# Worker pod configuration
+worker:
+  # Service account for worker pods
+  serviceAccount:
+    create: true # Set to true to create a service account for worker pods
+    name: "trigger-worker" # Name of the service account
+    annotations: {} # Annotations to add to the service account (e.g., for AWS IRSA, GCP Workload Identity)
+  
+  # RBAC configuration for worker pods
+  rbac:
+    create: false # Set to true to create RBAC resources if worker pods need Kubernetes API access
 
 # PostgreSQL configuration
 # Subchart: https://github.com/bitnami/charts/tree/main/bitnami/postgresql

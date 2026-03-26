@@ -7,6 +7,7 @@ import {
   DeploymentFinalizedEvent,
   DeploymentEventFromString,
   DeploymentTriggeredVia,
+  CreateBackgroundWorkerRequestBody,
 } from "@trigger.dev/core/v3/schemas";
 import { Command, Option as CommandOption } from "commander";
 import { join, relative, resolve } from "node:path";
@@ -47,7 +48,7 @@ import {
   prettyWarning,
 } from "../utilities/cliOutput.js";
 import { loadDotEnvVars } from "../utilities/dotEnv.js";
-import { isDirectory } from "../utilities/fileSystem.js";
+import { isDirectory, writeJSONFile, readJSONFile, pathExists } from "../utilities/fileSystem.js";
 import { setGithubActionsOutputAndEnvVars } from "../utilities/githubActions.js";
 import { createGitMeta, isGitHubActions } from "../utilities/gitMeta.js";
 import { printStandloneInitialBanner } from "../utilities/initialBanner.js";
@@ -59,6 +60,8 @@ import { spinner } from "../utilities/windows.js";
 import { login } from "./login.js";
 import { archivePreviewBranch } from "./preview.js";
 import { updateTriggerPackages } from "./update.js";
+import { alwaysExternal } from "@trigger.dev/core/v3/build";
+import { readdirSync } from "node:fs";
 
 const DeployCommandOptions = CommonCommandOptions.extend({
   dryRun: z.boolean().default(false),
@@ -87,6 +90,14 @@ const DeployCommandOptions = CommonCommandOptions.extend({
   cacheCompression: z.enum(["zstd", "gzip"]).default("zstd"),
   compressionLevel: z.number().optional(),
   forceCompression: z.boolean().default(true),
+  // Two-phase deploy options
+  registry: z.string().optional(),
+  repository: z.string().optional(),
+  buildOnly: z.boolean().default(false),
+  registerOnly: z.boolean().default(false),
+  baseImageNode: z.string().optional(),
+  containerfileModule: z.string().optional(),
+  skipDigest: z.boolean().default(false),
 });
 
 type DeployCommandOptions = z.infer<typeof DeployCommandOptions>;
@@ -130,6 +141,28 @@ export function configureDeployCommand(program: Command) {
         .option(
           "--skip-promotion",
           "Skip promoting the deployment to the current deployment for the environment."
+        )
+        .option("--build-only", "Build and push the worker image without registering it")
+        .option("--register-only", "Register a previously built image without building")
+        .option(
+          "--registry <registry>",
+          "Docker registry to use for build-only mode (defaults to localhost:5001)"
+        )
+        .option(
+          "--repository <repository>",
+          "Docker repository path to use for build-only mode (defaults to trigger/<project>)"
+        )
+        .option(
+          "--base-image-node <image>",
+          "Custom base image for Node.js runtime (e.g., my-registry/node:21-slim)"
+        )
+        .option(
+          "--containerfile-module <module>",
+          "Path to a JavaScript/TypeScript module that exports a containerfile template"
+        )
+        .option(
+          "--skip-digest",
+          "Skip sending the image digest when registering (for register-only mode)"
         )
     )
       .addOption(
@@ -258,14 +291,28 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
     intro(`Deploying project${options.skipPromotion ? " (without promotion)" : ""}`);
   }
 
-  if (!options.skipUpdateCheck) {
-    await updateTriggerPackages(dir, { ...options }, true, true);
+  if (options.buildOnly && options.registerOnly) {
+    throw new Error("--build-only and --register-only cannot be used together");
   }
 
   const cwd = process.cwd();
   const projectPath = resolve(cwd, dir);
 
   verifyDirectory(dir, projectPath);
+
+  if (options.buildOnly) {
+    await buildOnlyDeploy(projectPath, dir, options);
+    return;
+  }
+
+  if (options.registerOnly) {
+    await registerOnlyDeploy(projectPath, dir, options);
+    return;
+  }
+
+  if (!options.skipUpdateCheck) {
+    await updateTriggerPackages(dir, { ...options }, true, true);
+  }
 
   const authorization = await login({
     embedded: true,
@@ -395,6 +442,8 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
       envVars: serverEnvVars.success ? serverEnvVars.data.variables : {},
       forcedExternals,
       plain: options.plain,
+      baseImageNode: options.baseImageNode,
+      containerfileModule: options.containerfileModule,
       listener: {
         onBundleStart() {
           $buildSpinner.start("Building trigger code");
@@ -553,6 +602,7 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
     cacheCompression: options.cacheCompression,
     compressionLevel: options.compressionLevel,
     forceCompression: options.forceCompression,
+    indexEnvVars: serverEnvVars.success ? serverEnvVars.data.variables : {},
     onLog: (logMessage) => {
       if (options.plain || isCI) {
         console.log(logMessage);
@@ -615,6 +665,118 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
     );
 
     throw new SkipLoggingError("Failed to build image");
+  }
+
+  // Post-build indexing: Read index files and create background worker
+  // Note: This only works for local builds. For remote builds (Depot), the indexing
+  // still happens during the Docker build but doesn't make API calls from within the container.
+  // TODO: Consider extracting index files from remote builds or using a different approach.
+  if (isLocalBuild) {
+    const dockerExportPath = join(destination.path, "docker-export");
+    const indexMetadataPath = join(dockerExportPath, "index-metadata.json");
+    const indexErrorPath = join(dockerExportPath, "index-error.json");
+
+    logger.debug("Checking for index files", { dockerExportPath, indexMetadataPath, indexErrorPath });
+
+    // Verify the docker export directory exists
+    if (!(await pathExists(dockerExportPath))) {
+      await failDeploy(
+        projectClient.client,
+        deployment,
+        { name: "BuildError", message: "Docker export directory not found - indexing files were not extracted from the build" },
+        buildResult.logs,
+        $spinner
+      );
+      throw new SkipLoggingError("Failed to extract indexing files from Docker build");
+    }
+
+    // Check if there was an indexing error
+    if (await pathExists(indexErrorPath)) {
+      const indexError = await readJSONFile(indexErrorPath);
+      await failDeploy(
+        projectClient.client,
+        deployment,
+        { name: "IndexingError", message: "Failed to index deployment" },
+        buildResult.logs,
+        $spinner
+      );
+      throw new SkipLoggingError(`Indexing failed: ${JSON.stringify(indexError.error)}`);
+    }
+
+    // Read the index metadata - this is REQUIRED
+    if (!(await pathExists(indexMetadataPath))) {
+      await failDeploy(
+        projectClient.client,
+        deployment,
+        { name: "BuildError", message: "index-metadata.json not found - the Docker build did not produce required indexing output" },
+        buildResult.logs,
+        $spinner
+      );
+      throw new SkipLoggingError("Missing critical index-metadata.json file");
+    }
+
+    logger.debug("Found index-metadata.json, creating background worker");
+    const indexMetadata = await readJSONFile(indexMetadataPath);
+
+    if (!indexMetadata || typeof indexMetadata !== 'object') {
+      await failDeploy(
+        projectClient.client,
+        deployment,
+        { name: "BuildError", message: "index-metadata.json is invalid or empty" },
+        buildResult.logs,
+        $spinner
+      );
+      throw new SkipLoggingError("Invalid index-metadata.json file");
+    }
+
+      const backgroundWorkerBody: CreateBackgroundWorkerRequestBody = {
+        localOnly: true,
+        metadata: {
+          contentHash: indexMetadata.contentHash,
+          packageVersion: indexMetadata.packageVersion,
+          cliPackageVersion: indexMetadata.cliPackageVersion,
+          tasks: indexMetadata.tasks,
+          queues: indexMetadata.queues,
+          sourceFiles: indexMetadata.sourceFiles,
+          runtime: indexMetadata.runtime,
+          runtimeVersion: indexMetadata.runtimeVersion,
+        },
+        engine: "V2",
+        supportsLazyAttempts: true,
+        buildPlatform: indexMetadata.buildPlatform,
+        targetPlatform: indexMetadata.targetPlatform,
+      };
+
+      const createResponse = await projectClient.client.createDeploymentBackgroundWorker(
+        deployment.id,
+        backgroundWorkerBody
+      );
+
+      if (!createResponse.success) {
+        logger.error(
+          JSON.stringify({
+            message: "Failed to create background worker",
+            buildPlatform: indexMetadata.buildPlatform,
+            targetPlatform: indexMetadata.targetPlatform,
+            error: createResponse.error,
+          })
+        );
+        // Don't fail the deployment for multi-platform builds
+      } else {
+        logger.debug(
+          JSON.stringify({
+            message: "Background worker created",
+            buildPlatform: indexMetadata.buildPlatform,
+            targetPlatform: indexMetadata.targetPlatform,
+            createResponse: createResponse.data,
+          })
+        );
+      }
+  } else {
+    // Remote builds (Depot) still perform indexing and API calls during the Docker build
+    logger.debug("Remote build detected - indexing won't happen here");
+
+    throw new Error("Remote build detected - indexing won't happen here because we're not extracting the index.json file");
   }
 
   const getDeploymentResponse = await projectClient.client.getDeployment(deployment.id);
@@ -1195,7 +1357,7 @@ async function handleNativeBuildServerDeploy({
       case "log": {
         if (record.seqNum === 0) {
           $queuedSpinner.stop("Build started");
-          console.log("│");
+          console.log("\u2502");
           queuedSpinnerStopped = true;
         }
 
@@ -1225,7 +1387,7 @@ async function handleNativeBuildServerDeploy({
         // Ideally, we'd use clack's `taskLog` to only show the recent n lines of logs as they are streamed, but that also seems brittle
         // and has some issues with cursor movements/clearing lines that it shouldn't clear.
         // We can revisit this on future versions of `@clack/prompts`.
-        console.log(`│  ${formattedTimestamp}  ${formattedMessage}`);
+        console.log(`\u2502  ${formattedTimestamp}  ${formattedMessage}`);
         break;
       }
       case "finalized": {
@@ -1391,6 +1553,524 @@ async function handleNativeBuildServerDeploy({
       return process.exit(0);
     }
   }
+}
+
+/**
+ * Builds the project and creates a Docker image without registering it with the server.
+ *
+ * Registry and repository can be configured via:
+ * - CLI options: --registry and --repository
+ * - Environment variables: TRIGGER_REGISTRY and TRIGGER_REPOSITORY
+ * - Defaults: localhost:5001 and trigger/<project>
+ *
+ * Examples:
+ * - trigger.dev deploy --build-only --registry registry.example.com --repository myorg/myproject
+ * - TRIGGER_REGISTRY=gcr.io TRIGGER_REPOSITORY=myproject/trigger trigger.dev deploy --build-only
+ */
+async function buildOnlyDeploy(projectPath: string, dir: string, options: DeployCommandOptions) {
+  intro(`Building project (build-only mode)`);
+
+  if (!options.skipUpdateCheck) {
+    await updateTriggerPackages(dir, { ...options }, true, true);
+  }
+
+  if (options.env === "production") {
+    options.env = "prod";
+  }
+
+  const envVars = resolveLocalEnvVars(options.envFile);
+
+  const resolvedConfig = await loadConfig({
+    cwd: projectPath,
+    overrides: { project: options.projectRef ?? envVars.TRIGGER_PROJECT_REF },
+    configFile: options.config,
+  });
+
+  logger.debug("Resolved config", resolvedConfig);
+
+  const gitMeta = await createGitMeta(resolvedConfig.workspaceDir);
+  logger.debug("gitMeta", gitMeta);
+
+  const branch =
+    options.env === "preview" ? getBranch({ specified: options.branch, gitMeta }) : undefined;
+
+  if (options.env === "preview" && !branch) {
+    throw new Error(
+      "Didn't auto-detect preview branch, so you need to specify one. Pass --branch <branch>."
+    );
+  }
+
+  loadDotEnvVars(resolvedConfig.workingDir, options.envFile);
+
+  const destination = getTmpDir(resolvedConfig.workingDir, "build", options.dryRun);
+
+  const $buildSpinner = spinner();
+
+  const buildManifest = await buildWorker({
+    target: "deploy",
+    environment: options.env,
+    branch,
+    destination: destination.path,
+    resolvedConfig,
+    rewritePaths: true,
+    envVars: {}, // No server env vars in build-only mode
+    forcedExternals: alwaysExternal,
+    baseImageNode: options.baseImageNode,
+    containerfileModule: options.containerfileModule,
+    listener: {
+      onBundleStart() {
+        $buildSpinner.start("Building trigger code");
+      },
+      onBundleComplete() {
+        $buildSpinner.stop("Successfully built trigger code");
+      },
+    },
+  });
+
+  logger.debug("Successfully built project to", destination.path);
+
+  logger.info("Project is", resolvedConfig.project);
+
+  // Resolve registry and repository from options, env vars, or defaults
+  const registry = options.registry ?? envVars.TRIGGER_REGISTRY ?? "localhost:5001";
+  const repository = options.repository ?? envVars.TRIGGER_REPOSITORY ?? `trigger/${resolvedConfig.project}`;
+
+  // Simulate a deployment version
+  const simulatedVersion = `build-${buildManifest.contentHash.substring(0, 8)}`;
+
+  // Construct imageTag with configurable registry and repository
+  const imageTag = `${registry}/${repository}:${buildManifest.contentHash.substring(0, 8)}`;
+
+  logger.debug("Using registry", { registry, repository, imageTag });
+
+  const $imageSpinner = spinner();
+  $imageSpinner.start("Building Docker image");
+
+  const buildResult = await buildImage({
+    isLocalBuild: true,
+    imagePlatform: "linux/amd64",
+    noCache: !options.cache,
+    push: options.push,
+    deploymentId: "offline",
+    deploymentVersion: simulatedVersion,
+    imageTag,
+    load: options.load,
+    contentHash: buildManifest.contentHash,
+    compilationPath: destination.path,
+    projectId: resolvedConfig.project,
+    projectRef: resolvedConfig.project,
+    apiUrl: options.apiUrl ?? "https://api.trigger.dev",
+    apiKey: "offline-build",
+    branchName: branch,
+    authAccessToken: "",
+    buildEnvVars: buildManifest.build.env,
+    indexEnvVars: {}, // No server env vars in build-only mode
+    network: options.network,
+    builder: options.builder,
+  });
+
+  // Check for indexing results in build-only mode
+  const dockerExportPath = join(destination.path, "docker-export");
+  const indexMetadataPath = join(dockerExportPath, "index-metadata.json");
+  const indexErrorPath = join(dockerExportPath, "index-error.json");
+
+  // Check if there was an indexing error
+  if (await pathExists(indexErrorPath)) {
+    const indexError = await readJSONFile(indexErrorPath);
+    $imageSpinner.stop("Failed to build image");
+    throw new Error(`Indexing failed: ${JSON.stringify(indexError.error)}`);
+  }
+
+  // Check for index metadata - this is required
+  if (!(await pathExists(indexMetadataPath))) {
+    $imageSpinner.stop("Failed to build image");
+    throw new Error("index-metadata.json not found - the Docker build did not produce required indexing output");
+  }
+
+  const indexMetadata = await readJSONFile(indexMetadataPath);
+  const taskCount = indexMetadata.tasks?.length || 0;
+  log.success(`Indexed ${taskCount} task${taskCount === 1 ? "" : "s"}`);
+
+  // Save all necessary data for registerOnlyDeploy
+  const deployData = {
+    environment: options.env,
+    branch,
+    contentHash: buildManifest.contentHash,
+    imageTag,
+    imageDigest: (buildResult as unknown as { digest?: string }).digest,
+    runtime: buildManifest.runtime,
+    taskCount,
+    gitMeta,
+    buildManifest: {
+      contentHash: buildManifest.contentHash,
+      packageVersion: buildManifest.packageVersion,
+      cliPackageVersion: buildManifest.cliPackageVersion,
+      features: (buildManifest as unknown as any).features,
+      deploy: buildManifest.deploy,
+    },
+    indexMetadata,
+    simulatedVersion,
+    buildPath: destination.path,
+  };
+
+  await writeJSONFile(join(projectPath, ".triggerdeploy.json"), deployData, true);
+
+  if (!buildResult.ok) {
+    $imageSpinner.stop("Failed to build image");
+    throw new Error(buildResult.error);
+  }
+
+  $imageSpinner.stop("Successfully built image");
+
+  if (options.saveLogs) {
+    const logPath = await saveLogs(simulatedVersion, buildResult.logs);
+    console.log(`Full build logs have been saved to ${logPath}`);
+  }
+
+  log.message("Build artifacts saved");
+
+  outro(
+    `Image ${imageTag} built${buildResult.digest ? " and pushed" : ""}. Run \`trigger.dev deploy --register-only\` to register it.`
+  );
+}
+
+async function registerOnlyDeploy(projectPath: string, dir: string, options: DeployCommandOptions) {
+  intro(`Registering deployment${options.skipPromotion ? " (without promotion)" : ""}`);
+
+  if (!options.skipUpdateCheck) {
+    await updateTriggerPackages(dir, { ...options }, true, true);
+  }
+
+  const authorization = await login({
+    embedded: true,
+    defaultApiUrl: options.apiUrl,
+    profile: options.profile,
+  });
+
+  if (!authorization.ok) {
+    if (authorization.error === "fetch failed") {
+      throw new Error(
+        `Failed to connect to ${authorization.auth?.apiUrl}. Are you sure it's the correct URL?`
+      );
+    } else {
+      throw new Error(
+        `You must login first. Use the \`login\` CLI command.\n\n${authorization.error}`
+      );
+    }
+  }
+
+  if (options.env === "production") {
+    options.env = "prod";
+  }
+
+  const envVars = resolveLocalEnvVars(options.envFile);
+
+  const resolvedConfig = await loadConfig({
+    cwd: projectPath,
+    overrides: { project: options.projectRef ?? envVars.TRIGGER_PROJECT_REF },
+    configFile: options.config,
+  });
+
+  const manifestPath = join(projectPath, ".triggerdeploy.json");
+  if (!(await pathExists(manifestPath))) {
+    throw new Error("No build information found. Run deploy --build-only first.");
+  }
+
+  const deployData = await readJSONFile(manifestPath);
+
+  // Override environment if specified
+  if (options.env && options.env !== deployData.environment) {
+    logger.warn(`Overriding environment from ${deployData.environment} to ${options.env}`);
+    deployData.environment = options.env;
+  }
+
+  const gitMeta = deployData.gitMeta;
+  const branch = deployData.branch;
+
+  // Handle preview branch logic
+  if (deployData.environment === "preview" && branch) {
+    if (gitMeta?.pullRequestState === "merged" || gitMeta?.pullRequestState === "closed") {
+      log.message(`Pull request ${gitMeta?.pullRequestNumber} is ${gitMeta?.pullRequestState}.`);
+      const $buildSpinner = spinner();
+      $buildSpinner.start(`Archiving preview branch: "${branch}"`);
+      const result = await archivePreviewBranch(authorization, branch, resolvedConfig.project);
+      $buildSpinner.stop(
+        result ? `Successfully archived "${branch}"` : `Failed to archive "${branch}".`
+      );
+      return;
+    }
+
+    logger.debug("Upserting branch", { env: deployData.environment, branch });
+    const branchEnv = await upsertBranch({
+      accessToken: authorization.auth.accessToken,
+      apiUrl: authorization.auth.apiUrl,
+      projectRef: resolvedConfig.project,
+      branch,
+      gitMeta,
+    });
+
+    logger.debug("Upserted branch env", branchEnv);
+
+    log.success(`Using preview branch "${branch}"`);
+
+    if (!branchEnv) {
+      throw new Error(`Failed to create branch "${branch}"`);
+    }
+  }
+
+  const projectClient = await getProjectClient({
+    accessToken: authorization.auth.accessToken,
+    apiUrl: authorization.auth.apiUrl,
+    projectRef: resolvedConfig.project,
+    env: deployData.environment,
+    branch,
+    profile: options.profile,
+  });
+
+  if (!projectClient) {
+    throw new Error("Failed to get project client");
+  }
+
+  const deploymentResponse = await projectClient.client.initializeDeployment({
+    contentHash: deployData.contentHash,
+    userId: authorization.userId,
+    gitMeta,
+    type: deployData.buildManifest.features?.run_engine_v2 ? "MANAGED" : "V1",
+    runtime: deployData.runtime,
+    isNativeBuild: false,
+  });
+
+  if (!deploymentResponse.success) {
+    throw new Error(`Failed to start deployment: ${deploymentResponse.error}`);
+  }
+
+  const deployment = deploymentResponse.data;
+  const version = deployment.version;
+
+  // TODO: Implement automatic image retagging
+  // Example ECR implementation:
+  // const sourceTag = deployData.imageTag; // e.g., localhost:5001/trigger/proj_abc:0f7d1460
+  // const targetTag = deployment.imageTag; // e.g., localhost:5001/trigger/proj_abc:20250725.10.prod
+  //
+  // // For ECR:
+  // const manifest = await x("aws", ["ecr", "batch-get-image",
+  //   "--repository-name", "trigger/proj_abc",
+  //   "--image-ids", "imageTag=0f7d1460",
+  //   "--output", "text",
+  //   "--query", "images[].imageManifest"
+  // ]);
+  // await x("aws", ["ecr", "put-image",
+  //   "--repository-name", "trigger/proj_abc",
+  //   "--image-tag", "20250725.10.prod",
+  //   "--image-manifest", manifest.stdout
+  // ]);
+
+  // Log retagging command for manual execution
+  if (deployData.imageTag && deployment.imageTag && deployData.imageTag !== deployment.imageTag) {
+    const sourceTag = deployData.imageTag.split(':').pop();
+    const targetTag = deployment.imageTag.split(':').pop();
+    const [registry, repoPath] = deployData.imageTag.split('/').slice(0, -1).join('/').split('/');
+    const repository = deployData.imageTag.split(':')[0].split('/').slice(-2).join('/');
+
+    logger.info(`\nImage needs retagging from ${sourceTag} to ${targetTag}`);
+    logger.info(`Run this command to retag:\n`);
+
+    if (deployData.imageTag.includes('.ecr.') && deployData.imageTag.includes('.amazonaws.com')) {
+      // ECR retagging command
+      logger.info(`MANIFEST=$(aws ecr batch-get-image --repository-name ${repository} --image-ids imageTag=${sourceTag} --output text --query 'images[].imageManifest')`);
+      logger.info(`aws ecr put-image --repository-name ${repository} --image-tag ${targetTag} --image-manifest "$MANIFEST"\n`);
+    } else {
+      // Local/Docker registry retagging
+      logger.info(`docker tag ${deployData.imageTag} ${deployment.imageTag}`);
+      logger.info(`docker push ${deployment.imageTag}\n`);
+    }
+
+    // Wait 5 seconds to give user time to see the command
+    await new Promise(resolve => setTimeout(resolve, 5000));
+  }
+
+  const rawDeploymentLink = `${authorization.dashboardUrl}/projects/v3/${resolvedConfig.project}/deployments/${deployment.shortCode}`;
+  const rawTestLink = `${authorization.dashboardUrl}/projects/v3/${
+    resolvedConfig.project
+  }/test?environment=${deployData.environment === "prod" ? "prod" : "stg"}`;
+
+  const deploymentLink = cliLink("View deployment", rawDeploymentLink);
+  const testLink = cliLink("Test tasks", rawTestLink);
+
+  const $spinner = spinner();
+
+  // Handle environment variable syncing
+  const hasVarsToSync =
+    Object.keys(deployData.buildManifest.deploy?.sync?.env || {}).length > 0 ||
+    (branch && Object.keys(deployData.buildManifest.deploy?.sync?.parentEnv || {}).length > 0);
+
+  if (hasVarsToSync) {
+    const childVars = deployData.buildManifest.deploy?.sync?.env ?? {};
+    const parentVars = deployData.buildManifest.deploy?.sync?.parentEnv ?? {};
+
+    const numberOfEnvVars = Object.keys(childVars).length + Object.keys(parentVars).length;
+    const vars = numberOfEnvVars === 1 ? "var" : "vars";
+
+    if (!options.skipSyncEnvVars) {
+      $spinner.start(`Syncing ${numberOfEnvVars} env ${vars} with the server`);
+
+      const uploadResult = await syncEnvVarsWithServer(
+        projectClient.client,
+        resolvedConfig.project,
+        deployData.environment,
+        childVars,
+        parentVars
+      );
+
+      if (!uploadResult.success) {
+        await failDeploy(
+          projectClient.client,
+          deployment,
+          {
+            name: "SyncEnvVarsError",
+            message: `Failed to sync ${numberOfEnvVars} env ${vars} with the server: ${uploadResult.error}`,
+          },
+          "",
+          $spinner
+        );
+        throw new SkipLoggingError("Failed to sync environment variables");
+      } else {
+        $spinner.stop(`Successfully synced ${numberOfEnvVars} env ${vars} with the server`);
+      }
+    } else {
+      logger.log(
+        "Skipping syncing env vars. The environment variables in your project have changed, but the --skip-sync-env-vars flag was provided."
+      );
+    }
+  }
+
+  // Create background worker if we have index metadata
+  if (deployData.indexMetadata) {
+    const backgroundWorkerBody: CreateBackgroundWorkerRequestBody = {
+      localOnly: true,
+      metadata: {
+        contentHash: deployData.indexMetadata.contentHash,
+        packageVersion: deployData.indexMetadata.packageVersion,
+        cliPackageVersion: deployData.indexMetadata.cliPackageVersion,
+        tasks: deployData.indexMetadata.tasks,
+        queues: deployData.indexMetadata.queues,
+        sourceFiles: deployData.indexMetadata.sourceFiles,
+        runtime: deployData.indexMetadata.runtime,
+        runtimeVersion: deployData.indexMetadata.runtimeVersion,
+      },
+      engine: "V2",
+      supportsLazyAttempts: true,
+      buildPlatform: deployData.indexMetadata.buildPlatform,
+      targetPlatform: deployData.indexMetadata.targetPlatform,
+    };
+
+    const createResponse = await projectClient.client.createDeploymentBackgroundWorker(
+      deployment.id,
+      backgroundWorkerBody
+    );
+
+    if (!createResponse.success) {
+      logger.error(
+        JSON.stringify({
+          message: "Failed to create background worker",
+          error: createResponse.error,
+        })
+      );
+    } else {
+      logger.debug(
+        JSON.stringify({
+          message: "Background worker created",
+          createResponse: createResponse.data,
+        })
+      );
+    }
+  }
+
+  if (isCI) {
+    log.step(`Deploying version ${version}\n`);
+  } else {
+    if (isLinksSupported) {
+      $spinner.start(`Deploying version ${version} ${deploymentLink}`);
+    } else {
+      $spinner.start(`Deploying version ${version}`);
+    }
+  }
+
+  const finalizeResponse = await projectClient.client.finalizeDeployment(
+    deployment.id,
+    {
+      ...(options.skipDigest ? {} : { imageDigest: deployData.imageDigest }),
+      skipPromotion: options.skipPromotion,
+    },
+    (logMessage) => {
+      if (isCI) {
+        console.log(logMessage);
+        return;
+      }
+
+      if (isLinksSupported) {
+        $spinner.message(`Deploying version ${version} ${deploymentLink}: ${logMessage}`);
+      } else {
+        $spinner.message(`Deploying version ${version}: ${logMessage}`);
+      }
+    }
+  );
+
+  if (!finalizeResponse.success) {
+    await failDeploy(
+      projectClient.client,
+      deployment,
+      { name: "FinalizeError", message: finalizeResponse.error },
+      "",
+      $spinner
+    );
+
+    throw new SkipLoggingError("Failed to finalize deployment");
+  }
+
+  if (isCI) {
+    log.step(`Successfully deployed version ${version}`);
+  } else {
+    $spinner.stop(`Successfully deployed version ${version}`);
+  }
+
+  const taskCount = deployData.taskCount || 0;
+
+  outro(
+    `Version ${version} deployed with ${taskCount} detected task${taskCount === 1 ? "" : "s"} ${
+      isLinksSupported ? `| ${deploymentLink} | ${testLink}` : ""
+    }`
+  );
+
+  if (!isLinksSupported) {
+    console.log("View deployment");
+    console.log(rawDeploymentLink);
+    console.log(); // new line
+    console.log("Test tasks");
+    console.log(rawTestLink);
+  }
+
+  setGithubActionsOutputAndEnvVars({
+    envVars: {
+      TRIGGER_DEPLOYMENT_VERSION: version,
+      TRIGGER_VERSION: version,
+      TRIGGER_DEPLOYMENT_SHORT_CODE: deployment.shortCode,
+      TRIGGER_DEPLOYMENT_URL: `${authorization.dashboardUrl}/projects/v3/${resolvedConfig.project}/deployments/${deployment.shortCode}`,
+      TRIGGER_TEST_URL: `${authorization.dashboardUrl}/projects/v3/${
+        resolvedConfig.project
+      }/test?environment=${deployData.environment === "prod" ? "prod" : "stg"}`,
+    },
+    outputs: {
+      deploymentVersion: version,
+      workerVersion: version,
+      deploymentShortCode: deployment.shortCode,
+      deploymentUrl: `${authorization.dashboardUrl}/projects/v3/${resolvedConfig.project}/deployments/${deployment.shortCode}`,
+      testUrl: `${authorization.dashboardUrl}/projects/v3/${
+        resolvedConfig.project
+      }/test?environment=${deployData.environment === "prod" ? "prod" : "stg"}`,
+      needsPromotion: options.skipPromotion ? "true" : "false",
+    },
+  });
 }
 
 export function verifyDirectory(dir: string, projectPath: string) {

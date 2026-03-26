@@ -45,7 +45,11 @@ export class TestPresenter extends BasePresenter {
       >`WITH workers AS (
           SELECT
                 bw.*,
-                ROW_NUMBER() OVER(ORDER BY string_to_array(bw.version, '.')::int[] DESC) AS rn
+                ROW_NUMBER() OVER(
+                  ORDER BY 
+                    string_to_array(split_part(bw.version, '-', 1), '.')::int[] DESC,
+                    split_part(bw.version, '-', 2) DESC
+                ) AS rn
           FROM
                 ${sqlDatabaseSchema}."BackgroundWorker" bw
           WHERE "runtimeEnvironmentId" = ${envId}

@@ -345,6 +345,10 @@ const EnvironmentSchema = z
 
     DEPLOY_IMAGE_PLATFORM: z.string().default("linux/amd64"),
     DEPLOY_VERSION_SUFFIX: z.string().optional(),
+    // Full image reference override - bypasses auto-generation of image tags
+    // When set, all deployments will use this exact image reference
+    // Example: "myregistry.com/myorg/myapp:1.0.5"
+    DEPLOY_IMAGE_OVERRIDE: z.string().optional(),
     DEPLOY_TIMEOUT_MS: z.coerce
       .number()
       .int()

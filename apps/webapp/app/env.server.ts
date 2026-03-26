@@ -334,6 +334,7 @@ const EnvironmentSchema = z
       .transform((v) => v ?? process.env.DEPLOY_REGISTRY_ECR_ASSUME_ROLE_EXTERNAL_ID),
 
     DEPLOY_IMAGE_PLATFORM: z.string().default("linux/amd64"),
+    DEPLOY_VERSION_SUFFIX: z.string().optional(),
     DEPLOY_TIMEOUT_MS: z.coerce
       .number()
       .int()

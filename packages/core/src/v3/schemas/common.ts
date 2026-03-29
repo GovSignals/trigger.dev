@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { DeserializedJsonSchema } from "../../schemas/json.js";
-import type { RuntimeEnvironmentType as DBRuntimeEnvironmentType } from "@trigger.dev/database";
+
+// Inline Prisma enum type — kept in sync with internal-packages/database/prisma/schema.prisma
+type DBRuntimeEnvironmentType = "PRODUCTION" | "STAGING" | "DEVELOPMENT" | "PREVIEW";
 
 export type Enum<T extends string> = { [K in T]: K };
 

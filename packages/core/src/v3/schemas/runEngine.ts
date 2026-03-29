@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { Enum, MachinePreset, RuntimeEnvironmentType, TaskRunExecution } from "./common.js";
 import { EnvironmentType } from "./schemas.js";
-import type * as DB_TYPES from "@trigger.dev/database";
+
+// Inline Prisma enum types — kept in sync with internal-packages/database/prisma/schema.prisma
+type DBTaskRunExecutionStatus = "RUN_CREATED" | "DELAYED" | "QUEUED" | "QUEUED_EXECUTING" | "PENDING_EXECUTING" | "EXECUTING" | "EXECUTING_WITH_WAITPOINTS" | "SUSPENDED" | "PENDING_CANCEL" | "FINISHED";
+type DBTaskRunStatus = "DELAYED" | "PENDING" | "PENDING_VERSION" | "WAITING_FOR_DEPLOY" | "DEQUEUED" | "EXECUTING" | "WAITING_TO_RESUME" | "RETRYING_AFTER_FAILURE" | "PAUSED" | "CANCELED" | "INTERRUPTED" | "COMPLETED_SUCCESSFULLY" | "COMPLETED_WITH_ERRORS" | "SYSTEM_FAILURE" | "CRASHED" | "EXPIRED" | "TIMED_OUT";
+type DBWaitpointType = "RUN" | "DATETIME" | "MANUAL" | "BATCH";
+type DBWaitpointStatus = "PENDING" | "COMPLETED";
+type DBCheckpointType = "DOCKER" | "KUBERNETES" | "COMPUTE";
 
 const anyString = z.custom<string & {}>((v) => typeof v === "string");
 
@@ -35,7 +41,7 @@ export const TaskRunExecutionStatus = {
   PENDING_CANCEL: "PENDING_CANCEL",
   FINISHED: "FINISHED",
   DELAYED: "DELAYED",
-} satisfies Enum<DB_TYPES.TaskRunExecutionStatus>;
+} satisfies Enum<DBTaskRunExecutionStatus>;
 
 export type TaskRunExecutionStatus =
   (typeof TaskRunExecutionStatus)[keyof typeof TaskRunExecutionStatus];
@@ -58,7 +64,7 @@ export const TaskRunStatus = {
   CRASHED: "CRASHED",
   EXPIRED: "EXPIRED",
   TIMED_OUT: "TIMED_OUT",
-} satisfies Enum<DB_TYPES.TaskRunStatus>;
+} satisfies Enum<DBTaskRunStatus>;
 
 export type TaskRunStatus = (typeof TaskRunStatus)[keyof typeof TaskRunStatus];
 
@@ -67,16 +73,16 @@ export const WaitpointType = {
   DATETIME: "DATETIME",
   MANUAL: "MANUAL",
   BATCH: "BATCH",
-} satisfies Enum<DB_TYPES.WaitpointType>;
+} satisfies Enum<DBWaitpointType>;
 
 export type WaitpointType = (typeof WaitpointType)[keyof typeof WaitpointType];
 
 const WaitpointStatusValues = {
   PENDING: "PENDING",
   COMPLETED: "COMPLETED",
-} satisfies Enum<DB_TYPES.WaitpointStatus>;
+} satisfies Enum<DBWaitpointStatus>;
 export const WaitpointStatus = z.enum(
-  Object.values(WaitpointStatusValues) as [DB_TYPES.WaitpointStatus]
+  Object.values(WaitpointStatusValues) as [DBWaitpointStatus]
 );
 export type WaitpointStatus = z.infer<typeof WaitpointStatus>;
 
@@ -178,7 +184,7 @@ export const CheckpointTypeEnum = {
   DOCKER: "DOCKER",
   KUBERNETES: "KUBERNETES",
   COMPUTE: "COMPUTE",
-} satisfies Enum<DB_TYPES.TaskRunCheckpointType>;
+} satisfies Enum<DBCheckpointType>;
 export type CheckpointTypeEnum = (typeof CheckpointTypeEnum)[keyof typeof CheckpointTypeEnum];
 
 export const CheckpointType = z.enum(Object.values(CheckpointTypeEnum) as [CheckpointTypeEnum]);

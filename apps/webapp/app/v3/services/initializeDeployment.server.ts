@@ -124,29 +124,46 @@ export class InitializeDeploymentService extends BaseService {
 
       const deploymentShortCode = nanoid(8);
 
-      const [imageRefError, imageRefResult] = await tryCatch(
-        getDeploymentImageRef({
-          registry: registryConfig,
-          projectRef: environment.project.externalRef,
-          nextVersion,
-          environmentType: environment.type,
-          deploymentShortCode,
-        })
-      );
+      // If DEPLOY_IMAGE_OVERRIDE is set, use it instead of generating an image reference
+      let imageRef: string;
+      let isEcr = false;
+      let repoCreated = false;
 
-      if (imageRefError) {
-        logger.error("Failed to get deployment image ref", {
+      if (env.DEPLOY_IMAGE_OVERRIDE) {
+        imageRef = env.DEPLOY_IMAGE_OVERRIDE;
+        logger.info("Using image override", {
+          imageRef,
           environmentId: environment.id,
           projectId: environment.projectId,
           version: nextVersion,
-          triggeredById: triggeredBy?.id,
-          type: payload.type,
-          cause: imageRefError.message,
         });
-        throw new ServiceValidationError("Failed to get deployment image ref");
-      }
+      } else {
+        const [imageRefError, imageRefResult] = await tryCatch(
+          getDeploymentImageRef({
+            registry: registryConfig,
+            projectRef: environment.project.externalRef,
+            nextVersion,
+            environmentType: environment.type,
+            deploymentShortCode,
+          })
+        );
 
-      const { imageRef, isEcr, repoCreated } = imageRefResult;
+        if (imageRefError) {
+          logger.error("Failed to get deployment image ref", {
+            environmentId: environment.id,
+            projectId: environment.projectId,
+            version: nextVersion,
+            triggeredById: triggeredBy?.id,
+            type: payload.type,
+            cause: imageRefError.message,
+          });
+          throw new ServiceValidationError("Failed to get deployment image ref");
+        }
+
+        imageRef = imageRefResult.imageRef;
+        isEcr = imageRefResult.isEcr;
+        repoCreated = imageRefResult.repoCreated;
+      }
 
       // We keep using `BUILDING` as the initial status if not explicitly set
       // to avoid changing the behavior for deployments not created in the build server.

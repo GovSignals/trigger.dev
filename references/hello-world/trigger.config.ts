@@ -4,7 +4,7 @@ import { lightpanda } from "@trigger.dev/build/extensions/lightpanda";
 
 export default defineConfig({
   compatibilityFlags: ["run_engine_v2"],
-  project: "proj_rrkpdguyagvsoktglnod",
+  project: "proj_vaegotxxglociskxdzmf",
   experimental_processKeepAlive: {
     enabled: true,
     maxExecutionsPerProcess: 20,

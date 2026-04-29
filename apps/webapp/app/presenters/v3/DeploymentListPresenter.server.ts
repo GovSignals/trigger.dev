@@ -202,11 +202,7 @@ WHERE
   wd."projectId" = ${project.id}
   AND wd."environmentId" = ${environment.id}
 ORDER BY
-  string_to_array(split_part(wd."version", '-', 1), '.')::int[] DESC,
-  -- Capture the full suffix (everything after the first hyphen) so multi-hyphen
-  -- suffixes like "20260101.1-pre-rc.1" sort correctly. split_part(..., 2)
-  -- would drop everything after the second hyphen and tie-break incorrectly.
-  COALESCE(substring(wd."version" from '-(.*)$'), '') DESC
+  string_to_array(wd."version", '.')::int[] DESC
 LIMIT ${pageSize} OFFSET ${pageSize * (page - 1)};`;
 
     const { connectedGithubRepository } = project;
@@ -323,16 +319,7 @@ LIMIT ${pageSize} OFFSET ${pageSize * (page - 1)};`;
       FROM ${sqlDatabaseSchema}."WorkerDeployment"
       WHERE "projectId" = ${project.id}
         AND "environmentId" = ${environment.id}
-        AND (
-          string_to_array(split_part(version, '-', 1), '.')::int[] > string_to_array(split_part(${version}, '-', 1), '.')::int[]
-          OR (
-            string_to_array(split_part(version, '-', 1), '.')::int[] = string_to_array(split_part(${version}, '-', 1), '.')::int[]
-            -- Compare the full suffix (everything after the first hyphen) so
-            -- multi-hyphen suffixes like "1-pre-rc.1" vs "1-pre-rc.2" don't
-            -- tie. split_part(..., 2) only returns the second segment.
-            AND COALESCE(substring(version from '-(.*)$'), '') > COALESCE(substring(${version} from '-(.*)$'), '')
-          )
-        )
+        AND string_to_array(version, '.')::int[] > string_to_array(${version}, '.')::int[]
     `;
 
     const count = Number(deploymentsSinceVersion[0].count);

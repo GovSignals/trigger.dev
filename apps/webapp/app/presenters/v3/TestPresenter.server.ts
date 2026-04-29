@@ -45,13 +45,7 @@ export class TestPresenter extends BasePresenter {
       >`WITH workers AS (
           SELECT
                 bw.*,
-                ROW_NUMBER() OVER(
-                  ORDER BY
-                    string_to_array(split_part(bw.version, '-', 1), '.')::int[] DESC,
-                    -- Capture the full suffix (everything after the first hyphen) so
-                    -- multi-hyphen suffixes like "1-pre-rc.1" sort correctly.
-                    COALESCE(substring(bw.version from '-(.*)$'), '') DESC
-                ) AS rn
+                ROW_NUMBER() OVER(ORDER BY string_to_array(bw.version, '.')::int[] DESC) AS rn
           FROM
                 ${sqlDatabaseSchema}."BackgroundWorker" bw
           WHERE "runtimeEnvironmentId" = ${envId}

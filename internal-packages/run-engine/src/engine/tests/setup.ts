@@ -292,7 +292,7 @@ export async function setupBackgroundWorker(
   };
 }
 
-function calculateNextBuildVersion(latestVersion?: string | null, suffix?: string): string {
+function calculateNextBuildVersion(latestVersion?: string | null): string {
   const today = new Date();
   const year = today.getFullYear();
   const month = today.getMonth() + 1;
@@ -300,20 +300,15 @@ function calculateNextBuildVersion(latestVersion?: string | null, suffix?: strin
   const todayFormatted = `${year}${month < 10 ? "0" : ""}${month}${day < 10 ? "0" : ""}${day}`;
 
   if (!latestVersion) {
-    const baseVersion = `${todayFormatted}.1`;
-    return suffix ? `${baseVersion}-${suffix}` : baseVersion;
+    return `${todayFormatted}.1`;
   }
 
-  // Extract base version and suffix from latest version
-  const [baseVersion, existingSuffix] = latestVersion.split("-");
-  const [date, buildNumber] = baseVersion.split(".");
+  const [date, buildNumber] = latestVersion.split(".");
 
   if (date === todayFormatted) {
     const nextBuildNumber = parseInt(buildNumber, 10) + 1;
-    const newBaseVersion = `${date}.${nextBuildNumber}`;
-    return suffix ? `${newBaseVersion}-${suffix}` : newBaseVersion;
+    return `${date}.${nextBuildNumber}`;
   }
 
-  const newBaseVersion = `${todayFormatted}.1`;
-  return suffix ? `${newBaseVersion}-${suffix}` : newBaseVersion;
+  return `${todayFormatted}.1`;
 }

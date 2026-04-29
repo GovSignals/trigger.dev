@@ -55,6 +55,7 @@ apps/**/public/build
 
 .cosine
 .trigger
+.triggerdeploy.json
 .tshy*
 .yarn
 *.tsbuildinfo

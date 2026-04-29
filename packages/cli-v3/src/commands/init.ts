@@ -389,36 +389,42 @@ async function gitIgnoreDotTriggerDir(dir: string, options: InitCommandOptions) 
       const projectDir = resolve(process.cwd(), dir);
       const gitIgnorePath = join(projectDir, ".gitignore");
 
+      // Entries we want present in the project's .gitignore. `.trigger` is the
+      // dev cache directory; `.triggerdeploy.json` is written by the
+      // two-phase deploy flow (`trigger deploy --build-only` writes it for the
+      // host CLI to consume in a later `--register-only` phase).
+      const requiredEntries = [".trigger", ".triggerdeploy.json"];
+
       span.setAttributes({
         "cli.projectDir": projectDir,
         "cli.gitIgnorePath": gitIgnorePath,
       });
 
       if (!(await pathExists(gitIgnorePath))) {
-        // Create .gitignore file
-        await createFile(gitIgnorePath, ".trigger");
+        await createFile(gitIgnorePath, requiredEntries.join("\n") + "\n");
 
-        log.step(`Added .trigger to .gitignore`);
+        log.step(`Created .gitignore with ${requiredEntries.join(", ")}`);
 
         span.end();
 
         return;
       }
 
-      // Check if .gitignore already contains .trigger
       const gitIgnoreContent = await readFile(gitIgnorePath);
 
-      if (gitIgnoreContent.includes(".trigger")) {
+      const missing = requiredEntries.filter((entry) => !gitIgnoreContent.includes(entry));
+
+      if (missing.length === 0) {
         span.end();
 
         return;
       }
 
-      const newGitIgnoreContent = `${gitIgnoreContent}\n.trigger`;
+      const newGitIgnoreContent = `${gitIgnoreContent.replace(/\n*$/, "")}\n${missing.join("\n")}\n`;
 
       await writeFile(gitIgnorePath, newGitIgnoreContent, "utf-8");
 
-      log.step(`Added .trigger to .gitignore`);
+      log.step(`Added ${missing.join(", ")} to .gitignore`);
 
       span.end();
     } catch (e) {

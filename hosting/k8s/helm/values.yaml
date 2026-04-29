@@ -329,18 +329,42 @@ supervisor:
     # - name: CUSTOM_VAR
     #   value: "custom-value"
 
-  # Extra volumes added to the Supervisor pod (e.g. CA bundle ConfigMap)
+  # Extra volumes added to the Supervisor pod.
+  #
+  # Mirrors the `webapp.extraVolumes` pattern. The most common use case is
+  # mounting an enterprise CA bundle into the supervisor so it can validate
+  # TLS connections to the trigger.dev webapp, an internal image registry,
+  # or any other service the supervisor calls. Pair with a matching
+  # `extraVolumeMounts` entry below and a `NODE_EXTRA_CA_CERTS` env var in
+  # `supervisor.extraEnvVars`.
   extraVolumes:
     []
+    # - name: config-volume
+    #   configMap:
+    #     name: my-config
+    #
+    # Example: enterprise CA bundle ConfigMap
     # - name: ca-bundle
     #   configMap:
-    #     name: my-ca-bundle
+    #     name: enterprise-ca-bundle
+    #     items:
+    #       - key: ca.crt
+    #         path: ca.crt
 
-  # Extra volume mounts added to the Supervisor container
+  # Extra volume mounts added to the Supervisor container.
   extraVolumeMounts:
     []
+    # - name: config-volume
+    #   mountPath: /etc/config
+    #   readOnly: true
+    #
+    # Example: enterprise CA bundle mount.
+    # Combine with:
+    #   supervisor.extraEnvVars:
+    #     - name: NODE_EXTRA_CA_CERTS
+    #       value: /etc/ssl/enterprise-ca/ca.crt
     # - name: ca-bundle
-    #   mountPath: /etc/ssl/custom-ca
+    #   mountPath: /etc/ssl/enterprise-ca
     #   readOnly: true
 
   # ServiceMonitor for Prometheus monitoring

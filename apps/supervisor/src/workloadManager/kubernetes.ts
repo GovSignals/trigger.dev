@@ -118,7 +118,7 @@ export class KubernetesWorkloadManager implements WorkloadManager {
               "app.kubernetes.io/component": "create",
             },
             annotations: {
-              "com.palantir.rubix.service/pod-cert": "{}",
+              ...env.KUBERNETES_WORKER_POD_ANNOTATIONS,
             },
           },
           spec: {

@@ -335,6 +335,13 @@ export class KubernetesWorkloadManager implements WorkloadManager {
             },
           }
         : {}),
+      ...(env.KUBERNETES_POD_DNS_NDOTS_OVERRIDE_ENABLED
+        ? {
+            dnsConfig: {
+              options: [{ name: "ndots", value: `${env.KUBERNETES_POD_DNS_NDOTS}` }],
+            },
+          }
+        : {}),
     };
   }
 

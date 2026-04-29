@@ -345,10 +345,25 @@ const EnvironmentSchema = z
 
     DEPLOY_IMAGE_PLATFORM: z.string().default("linux/amd64"),
     DEPLOY_VERSION_SUFFIX: z.string().optional(),
-    // Full image reference override - bypasses auto-generation of image tags
-    // When set, all deployments will use this exact image reference
-    // Example: "myregistry.com/myorg/myapp:1.0.5"
-    DEPLOY_IMAGE_OVERRIDE: z.string().optional(),
+    /**
+     * Full image reference override - bypasses auto-generation of image tags.
+     * When set, every deployment uses this exact image reference instead of
+     * being routed through `getDeploymentImageRef` (ECR repo creation,
+     * per-project tagging, isEcr/repoCreated detection, etc).
+     *
+     * Intended for self-hosted setups where images are produced by a separate
+     * pipeline (e.g. CI builds + signs the image, the webapp just references
+     * it). Should NOT be set in multi-tenant deployments because every project
+     * shares the same image digest.
+     *
+     * Empty string is treated as unset.
+     *
+     * Example: `myregistry.com/myorg/myapp:1.0.5`
+     */
+    DEPLOY_IMAGE_OVERRIDE: z
+      .string()
+      .optional()
+      .transform((v) => (v && v.length > 0 ? v : undefined)),
     DEPLOY_TIMEOUT_MS: z.coerce
       .number()
       .int()

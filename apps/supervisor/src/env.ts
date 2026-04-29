@@ -94,6 +94,31 @@ const Env = z
     KUBERNETES_WORKER_NODETYPE_LABEL: z.string().default("v4-worker"),
     KUBERNETES_WORKER_SERVICE_ACCOUNT: z.string().optional(), // Service account for worker pods
     KUBERNETES_WORKER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN: BoolEnv.default(false), // Whether to mount SA token
+    KUBERNETES_WORKER_POD_ANNOTATIONS: z
+      .string()
+      .default("{}")
+      .transform((v, ctx) => {
+        try {
+          const parsed = JSON.parse(v);
+          if (
+            typeof parsed !== "object" ||
+            parsed === null ||
+            Array.isArray(parsed) ||
+            Object.values(parsed).some((value) => typeof value !== "string")
+          ) {
+            throw new Error("expected JSON object of string values");
+          }
+          return parsed as Record<string, string>;
+        } catch (err) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Invalid KUBERNETES_WORKER_POD_ANNOTATIONS: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          });
+          return z.NEVER;
+        }
+      }), // Extra annotations to apply to every worker pod (e.g. for service mesh / cert injection)
     KUBERNETES_IMAGE_PULL_SECRETS: z.string().optional(), // csv
     KUBERNETES_EPHEMERAL_STORAGE_SIZE_LIMIT: z.string().default("10Gi"),
     KUBERNETES_EPHEMERAL_STORAGE_SIZE_REQUEST: z.string().default("2Gi"),

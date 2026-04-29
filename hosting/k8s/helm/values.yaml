@@ -208,15 +208,6 @@ webapp:
   runReplication:
     logLevel: "info" # one of: log, error, warn, info, debug
 
-  # ServiceAccount configuration
-  serviceAccount:
-    create: true
-    # Name of the ServiceAccount to use. Required when create is false - otherwise
-    # the token-syncer RoleBinding would bind to the namespace's "default" SA.
-    name: ""
-    # Annotations to add to the ServiceAccount (e.g. eks.amazonaws.com/role-arn for IRSA)
-    annotations: {}
-
   # Observability configuration (OTel)
   observability:
     tracing:
@@ -407,10 +398,23 @@ worker:
     create: true # Set to true to create a service account for worker pods
     name: "trigger-worker" # Name of the service account
     annotations: {} # Annotations to add to the service account (e.g., for AWS IRSA, GCP Workload Identity)
-  
-  # RBAC configuration for worker pods
+
+  # RBAC configuration for worker pods.
+  #
+  # `create: false` is the default — most setups (including AWS IRSA and GCP
+  # Workload Identity) authenticate to cloud APIs rather than the Kubernetes
+  # API, so worker pods don't need a Role at all.
+  #
+  # When `create: true`, an empty Role is rendered and the operator MUST
+  # supply explicit least-privilege rules via `worker.rbac.rules` below.
   rbac:
-    create: false # Set to true to create RBAC resources if worker pods need Kubernetes API access
+    create: false
+    rules:
+      []
+      # - apiGroups: [""]
+      #   resources: ["configmaps"]
+      #   resourceNames: ["my-runtime-config"]
+      #   verbs: ["get"]
 
 # PostgreSQL configuration
 # Subchart: https://github.com/bitnami/charts/tree/main/bitnami/postgresql

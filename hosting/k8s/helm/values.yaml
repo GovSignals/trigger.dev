@@ -338,6 +338,20 @@ supervisor:
     # - name: CUSTOM_VAR
     #   value: "custom-value"
 
+  # Extra volumes added to the Supervisor pod (e.g. CA bundle ConfigMap)
+  extraVolumes:
+    []
+    # - name: ca-bundle
+    #   configMap:
+    #     name: my-ca-bundle
+
+  # Extra volume mounts added to the Supervisor container
+  extraVolumeMounts:
+    []
+    # - name: ca-bundle
+    #   mountPath: /etc/ssl/custom-ca
+    #   readOnly: true
+
   # ServiceMonitor for Prometheus monitoring
   serviceMonitor:
     enabled: false

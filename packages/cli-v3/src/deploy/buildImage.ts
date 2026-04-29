@@ -53,7 +53,6 @@ export interface BuildImageOptions {
   buildEnvVars?: Record<string, string | undefined>;
   indexEnvVars?: Record<string, string>; // Environment variables for indexing
   onLog?: (log: string) => void;
-  baseImageNode?: string; // Custom base image for Node.js runtime
 }
 
 export async function buildImage(options: BuildImageOptions): Promise<BuildImageResults> {
@@ -90,7 +89,6 @@ export async function buildImage(options: BuildImageOptions): Promise<BuildImage
     compressionLevel,
     forceCompression,
     onLog,
-    baseImageNode,
   } = options;
 
   if (isLocalBuild) {
@@ -122,7 +120,6 @@ export async function buildImage(options: BuildImageOptions): Promise<BuildImage
       compressionLevel,
       forceCompression,
       onLog,
-      baseImageNode,
     });
   }
 
@@ -156,7 +153,6 @@ export async function buildImage(options: BuildImageOptions): Promise<BuildImage
     forceCompression,
     indexEnvVars,
     onLog,
-    baseImageNode,
   });
 }
 
@@ -184,7 +180,6 @@ export interface DepotBuildImageOptions {
   forceCompression?: boolean;
   indexEnvVars?: Record<string, string>;
   onLog?: (log: string) => void;
-  baseImageNode?: string;
 }
 
 type BuildImageSuccess = {
@@ -362,7 +357,6 @@ interface SelfHostedBuildImageOptions {
   compressionLevel?: number;
   forceCompression?: boolean;
   onLog?: (log: string) => void;
-  baseImageNode?: string;
 }
 
 async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<BuildImageResults> {
@@ -974,7 +968,6 @@ export type GenerateContainerfileOptions = {
   image: BuildManifest["image"];
   indexScript: string;
   entrypoint: string;
-  baseImageNode?: string;
   containerfileModule?: string;
 };
 
@@ -1002,12 +995,8 @@ export const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
   const packages = Array.from(new Set(DEFAULT_PACKAGES.concat(options.image?.pkgs || []))).join(
     " "
   );
-  
-  // Use custom base image for Node.js runtimes if provided
-  let baseImage = BASE_IMAGE[options.runtime];
-  if (options.baseImageNode && (options.runtime === "node" || options.runtime === "node-22")) {
-    baseImage = options.baseImageNode;
-  }
+
+  const baseImage = BASE_IMAGE[options.runtime];
 
   return {
     baseImage,

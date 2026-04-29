@@ -42,7 +42,6 @@ export default {
     // - image: Image configuration with packages and instructions
     // - indexScript: Path to the indexing script
     // - entrypoint: Path to the runtime entrypoint
-    // - baseImageNode: Custom base image if provided via --base-image-node
     // - containerfileModule: Path to this module
     
     return `FROM your-base-image:latest
@@ -96,7 +95,6 @@ The `options` parameter passed to your `generate` function contains:
   },
   indexScript: string,  // e.g., ".trigger/index.mjs"
   entrypoint: string,   // e.g., ".trigger/run.mjs"
-  baseImageNode?: string,  // If --base-image-node was provided
   containerfileModule?: string  // Path to your module
 }
 ```
@@ -112,10 +110,9 @@ When using custom base images:
 
 ## Quick Start
 
-For simple base image replacement, you can also use the `--base-image-node` flag without a custom module:
+To swap the base image (or do anything more invasive), create a containerfile
+module like the examples above and pass it via `--containerfile-module`:
 
 ```bash
-npx trigger.dev@latest deploy --base-image-node node:20-alpine
+npx trigger.dev@latest deploy --containerfile-module ./containerfile.mjs
 ```
-
-For full control, create a custom module and use `--containerfile-module`. 

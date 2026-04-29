@@ -36,7 +36,6 @@ export type BuildWorkerOptions = {
   rewritePaths?: boolean;
   forcedExternals?: string[];
   plain?: boolean;
-  baseImageNode?: string;
   containerfileModule?: string;
 };
 
@@ -111,7 +110,6 @@ export async function buildWorker(options: BuildWorkerOptions) {
       resolvedConfig,
       outputPath: options.destination,
       bundleResult,
-      baseImageNode: options.baseImageNode,
       containerfileModule: options.containerfileModule,
     });
   }
@@ -172,14 +170,12 @@ async function writeDeployFiles({
   resolvedConfig,
   outputPath,
   bundleResult,
-  baseImageNode,
   containerfileModule,
 }: {
   buildManifest: BuildManifest;
   resolvedConfig: ResolvedConfig;
   outputPath: string;
   bundleResult: BundleResult;
-  baseImageNode?: string;
   containerfileModule?: string;
 }) {
   // Step 1. Read the package.json file
@@ -217,7 +213,7 @@ async function writeDeployFiles({
   );
 
   await writeJSONFile(join(outputPath, "build.json"), buildManifestToJSON(buildManifest));
-  await writeContainerfile(outputPath, buildManifest, baseImageNode, containerfileModule);
+  await writeContainerfile(outputPath, buildManifest, containerfileModule);
 }
 
 async function readProjectPackageJson(packageJsonPath: string) {
@@ -226,7 +222,11 @@ async function readProjectPackageJson(packageJsonPath: string) {
   return packageJson;
 }
 
-async function writeContainerfile(outputPath: string, buildManifest: BuildManifest, baseImageNode?: string, containerfileModule?: string) {
+async function writeContainerfile(
+  outputPath: string,
+  buildManifest: BuildManifest,
+  containerfileModule?: string
+) {
   if (!buildManifest.runControllerEntryPoint || !buildManifest.indexControllerEntryPoint) {
     throw new Error("Something went wrong with the build. Aborting deployment. [code 7789]");
   }
@@ -237,7 +237,6 @@ async function writeContainerfile(outputPath: string, buildManifest: BuildManife
     build: buildManifest.build,
     image: buildManifest.image,
     indexScript: buildManifest.indexControllerEntryPoint,
-    baseImageNode,
     containerfileModule,
   });
 

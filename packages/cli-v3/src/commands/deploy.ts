@@ -95,7 +95,6 @@ const DeployCommandOptions = CommonCommandOptions.extend({
   repository: z.string().optional(),
   buildOnly: z.boolean().default(false),
   registerOnly: z.boolean().default(false),
-  baseImageNode: z.string().optional(),
   containerfileModule: z.string().optional(),
   skipDigest: z.boolean().default(false),
 });
@@ -151,10 +150,6 @@ export function configureDeployCommand(program: Command) {
         .option(
           "--repository <repository>",
           "Docker repository path to use for build-only mode (defaults to trigger/<project>)"
-        )
-        .option(
-          "--base-image-node <image>",
-          "Custom base image for Node.js runtime (e.g., my-registry/node:21-slim)"
         )
         .option(
           "--containerfile-module <module>",
@@ -442,7 +437,6 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
       envVars: serverEnvVars.success ? serverEnvVars.data.variables : {},
       forcedExternals,
       plain: options.plain,
-      baseImageNode: options.baseImageNode,
       containerfileModule: options.containerfileModule,
       listener: {
         onBundleStart() {
@@ -1615,7 +1609,6 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
     rewritePaths: true,
     envVars: {}, // No server env vars in build-only mode
     forcedExternals: alwaysExternal,
-    baseImageNode: options.baseImageNode,
     containerfileModule: options.containerfileModule,
     listener: {
       onBundleStart() {

@@ -117,9 +117,9 @@ export class KubernetesWorkloadManager implements WorkloadManager {
               "app.kubernetes.io/part-of": "trigger-worker",
               "app.kubernetes.io/component": "create",
             },
-            annotations: {
-              ...env.KUBERNETES_WORKER_POD_ANNOTATIONS,
-            },
+            ...(Object.keys(env.KUBERNETES_WORKER_POD_ANNOTATIONS).length > 0
+              ? { annotations: { ...env.KUBERNETES_WORKER_POD_ANNOTATIONS } }
+              : {}),
           },
           spec: {
             ...this.addPlacementTags(this.#defaultPodSpec, opts.placementTags),
@@ -136,14 +136,9 @@ export class KubernetesWorkloadManager implements WorkloadManager {
                   },
                 ],
                 resources: this.#getResourcesForMachine(opts.machine),
-                securityContext: {
-                  runAsNonRoot: true,
-                  runAsUser: 1000,
-                  allowPrivilegeEscalation: false,
-                  capabilities: {
-                    drop: ["ALL"],
-                  },
-                },
+                ...(Object.keys(env.KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT).length > 0
+                  ? { securityContext: env.KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT }
+                  : {}),
                 env: [
                   {
                     name: "TRIGGER_DEQUEUED_AT_MS",
@@ -330,22 +325,13 @@ export class KubernetesWorkloadManager implements WorkloadManager {
       ...(env.KUBERNETES_WORKER_SERVICE_ACCOUNT
         ? { serviceAccountName: env.KUBERNETES_WORKER_SERVICE_ACCOUNT }
         : {}),
-      securityContext: {
-        runAsNonRoot: true,
-        runAsUser: 1000,
-        fsGroup: 1000,
-      },
+      ...(Object.keys(env.KUBERNETES_WORKER_POD_SECURITY_CONTEXT).length > 0
+        ? { securityContext: env.KUBERNETES_WORKER_POD_SECURITY_CONTEXT }
+        : {}),
       ...(env.KUBERNETES_WORKER_NODETYPE_LABEL
         ? {
             nodeSelector: {
               nodetype: env.KUBERNETES_WORKER_NODETYPE_LABEL,
-            },
-          }
-        : {}),
-      ...(env.KUBERNETES_POD_DNS_NDOTS_OVERRIDE_ENABLED
-        ? {
-            dnsConfig: {
-              options: [{ name: "ndots", value: `${env.KUBERNETES_POD_DNS_NDOTS}` }],
             },
           }
         : {}),

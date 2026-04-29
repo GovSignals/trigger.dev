@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { env as stdEnv } from "std-env";
 import { z } from "zod";
-import { AdditionalEnvVars, BoolEnv } from "./envUtil.js";
+import { AdditionalEnvVars, BoolEnv, JsonAny, JsonObjectEnv } from "./envUtil.js";
 
 const Env = z
   .object({
@@ -94,31 +94,28 @@ const Env = z
     KUBERNETES_WORKER_NODETYPE_LABEL: z.string().default("v4-worker"),
     KUBERNETES_WORKER_SERVICE_ACCOUNT: z.string().optional(), // Service account for worker pods
     KUBERNETES_WORKER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN: BoolEnv.default(false), // Whether to mount SA token
-    KUBERNETES_WORKER_POD_ANNOTATIONS: z
-      .string()
-      .default("{}")
-      .transform((v, ctx) => {
-        try {
-          const parsed = JSON.parse(v);
-          if (
-            typeof parsed !== "object" ||
-            parsed === null ||
-            Array.isArray(parsed) ||
-            Object.values(parsed).some((value) => typeof value !== "string")
-          ) {
-            throw new Error("expected JSON object of string values");
-          }
-          return parsed as Record<string, string>;
-        } catch (err) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `Invalid KUBERNETES_WORKER_POD_ANNOTATIONS: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          });
-          return z.NEVER;
-        }
-      }), // Extra annotations to apply to every worker pod (e.g. for service mesh / cert injection)
+    // Extra annotations to apply to every worker pod (e.g. for service mesh
+    // sidecar injection, certificate injection, scheduling hints).
+    KUBERNETES_WORKER_POD_ANNOTATIONS: JsonObjectEnv("KUBERNETES_WORKER_POD_ANNOTATIONS"),
+    // Pod-level securityContext applied to every worker pod (V1PodSecurityContext shape).
+    // Default is empty `{}`, preserving the upstream behavior of not setting
+    // a pod-level securityContext. Provide a JSON object to enforce e.g.
+    // `{"runAsNonRoot": true, "runAsUser": 1000, "fsGroup": 1000}`.
+    // OpenShift and other clusters with arbitrary-UID SCCs typically want
+    // to leave this empty and let the SCC inject values.
+    KUBERNETES_WORKER_POD_SECURITY_CONTEXT: JsonObjectEnv("KUBERNETES_WORKER_POD_SECURITY_CONTEXT", {
+      valueValidator: JsonAny,
+    }),
+    // Container-level securityContext applied to the worker container of every
+    // worker pod (V1SecurityContext shape). Default is empty `{}` (matches
+    // upstream's previous behavior of not setting a container securityContext).
+    // Provide a JSON object to enforce e.g.
+    // `{"runAsNonRoot": true, "runAsUser": 1000, "allowPrivilegeEscalation": false,
+    //   "capabilities": {"drop": ["ALL"]}, "seccompProfile": {"type": "RuntimeDefault"}}`.
+    KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT: JsonObjectEnv(
+      "KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT",
+      { valueValidator: JsonAny }
+    ),
     KUBERNETES_IMAGE_PULL_SECRETS: z.string().optional(), // csv
     KUBERNETES_EPHEMERAL_STORAGE_SIZE_LIMIT: z.string().default("10Gi"),
     KUBERNETES_EPHEMERAL_STORAGE_SIZE_REQUEST: z.string().default("2Gi"),
@@ -148,16 +145,6 @@ const Env = z
 
     KUBERNETES_MEMORY_OVERHEAD_GB: z.coerce.number().min(0).optional(), // Optional memory overhead to add to the limit in GB
     KUBERNETES_SCHEDULER_NAME: z.string().optional(), // Custom scheduler name for pods
-
-    // Pod DNS config — override the cluster default ndots to `KUBERNETES_POD_DNS_NDOTS`.
-    // Default k8s ndots is 5: any name with fewer than 5 dots (e.g. `api.example.com`, 2 dots) is first walked
-    // through every entry in the cluster search list (`<ns>.svc.cluster.local`, `svc.cluster.local`, `cluster.local`)
-    // before being tried as-is, turning one resolution into 4+ CoreDNS queries (×2 with A+AAAA).
-    // Overriding the default can be useful to cut CoreDNS query amplification for external domains.
-    // Note: before enabling, make sure no code path relies on search-list expansion for names with dots ≥ the value
-    // set here — those names will now hit their as-is form first and could resolve externally before falling back.
-    KUBERNETES_POD_DNS_NDOTS_OVERRIDE_ENABLED: BoolEnv.default(false),
-    KUBERNETES_POD_DNS_NDOTS: z.coerce.number().int().min(1).max(15).default(2),
     // Large machine affinity settings - large-* presets prefer a dedicated pool
     KUBERNETES_LARGE_MACHINE_AFFINITY_ENABLED: BoolEnv.default(false),
     KUBERNETES_LARGE_MACHINE_AFFINITY_POOL_LABEL_KEY: z
@@ -226,9 +213,7 @@ const Env = z
             if (!validEffects.includes(effect)) {
               ctx.addIssue({
                 code: z.ZodIssueCode.custom,
-                message: `Invalid toleration effect "${effect}" in "${entry}". Must be one of: ${validEffects.join(
-                  ", "
-                )}`,
+                message: `Invalid toleration effect "${effect}" in "${entry}". Must be one of: ${validEffects.join(", ")}`,
               });
               return z.NEVER;
             }

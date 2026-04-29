@@ -245,17 +245,23 @@ spec:
             {{- with .Values.supervisor.extraEnvVars }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if not .Values.webapp.bootstrap.enabled }}
+          {{- if or (not .Values.webapp.bootstrap.enabled) .Values.supervisor.extraVolumeMounts }}
           volumeMounts:
+            {{- if not .Values.webapp.bootstrap.enabled }}
             - name: shared
               mountPath: /home/node/shared
+            {{- end }}
+            {{- with .Values.supervisor.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           {{- with .Values.supervisor.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-      {{- if not .Values.webapp.bootstrap.enabled }}
+      {{- if or (not .Values.webapp.bootstrap.enabled) .Values.supervisor.extraVolumes }}
       volumes:
+        {{- if not .Values.webapp.bootstrap.enabled }}
         - name: shared
           {{- if .Values.persistence.shared.enabled }}
           persistentVolumeClaim:
@@ -263,6 +269,10 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- end }}
+        {{- with .Values.supervisor.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       {{- with .Values.supervisor.nodeSelector }}
       nodeSelector:

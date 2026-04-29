@@ -14,8 +14,13 @@ export function calculateNextBuildVersion(latestVersion?: string | null, suffix?
     return suffix ? `${baseVersion}-${suffix}` : baseVersion;
   }
 
-  // Extract base version and suffix from latest version
-  const [baseVersion, existingSuffix] = latestVersion.split("-");
+  // Extract base version (everything before the first hyphen) — any existing
+  // suffix is intentionally discarded; the new version takes the suffix passed
+  // by the caller, which may differ. Avoid `split("-")` indexed destructuring
+  // here so multi-hyphen suffixes don't read confusingly.
+  const hyphenIndex = latestVersion.indexOf("-");
+  const baseVersion =
+    hyphenIndex === -1 ? latestVersion : latestVersion.slice(0, hyphenIndex);
   const [date, buildNumber] = baseVersion.split(".");
 
   if (date === todayFormatted) {

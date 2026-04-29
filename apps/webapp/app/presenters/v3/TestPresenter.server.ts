@@ -46,9 +46,11 @@ export class TestPresenter extends BasePresenter {
           SELECT
                 bw.*,
                 ROW_NUMBER() OVER(
-                  ORDER BY 
+                  ORDER BY
                     string_to_array(split_part(bw.version, '-', 1), '.')::int[] DESC,
-                    split_part(bw.version, '-', 2) DESC
+                    -- Capture the full suffix (everything after the first hyphen) so
+                    -- multi-hyphen suffixes like "1-pre-rc.1" sort correctly.
+                    COALESCE(substring(bw.version from '-(.*)$'), '') DESC
                 ) AS rn
           FROM
                 ${sqlDatabaseSchema}."BackgroundWorker" bw

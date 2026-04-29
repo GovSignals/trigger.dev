@@ -1,11 +1,24 @@
 // Compares two versions of a deployment, like 20250208.1 and 20250208.2
 // Also handles versions with suffixes like 20250208.1-hardened
 // Returns -1 if versionA is older than versionB, 0 if they are the same, and 1 if versionA is newer than versionB
+
+const splitDeploymentVersion = (version: string): { base: string; suffix: string } => {
+  const hyphenIndex = version.indexOf("-");
+  if (hyphenIndex === -1) {
+    return { base: version, suffix: "" };
+  }
+  return {
+    base: version.slice(0, hyphenIndex),
+    // Capture everything after the first hyphen so multi-hyphen suffixes
+    // (e.g. "20250208.1-pre-rc.1") are preserved intact.
+    suffix: version.slice(hyphenIndex + 1),
+  };
+};
+
 export function compareDeploymentVersions(versionA: string, versionB: string) {
-  // Extract base versions and suffixes
-  const [baseVersionA, suffixA = ""] = versionA.split("-");
-  const [baseVersionB, suffixB = ""] = versionB.split("-");
-  
+  const { base: baseVersionA, suffix: suffixA } = splitDeploymentVersion(versionA);
+  const { base: baseVersionB, suffix: suffixB } = splitDeploymentVersion(versionB);
+
   const [dateA, numberA] = baseVersionA.split(".");
   const [dateB, numberB] = baseVersionB.split(".");
 

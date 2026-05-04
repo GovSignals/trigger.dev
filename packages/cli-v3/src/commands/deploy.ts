@@ -1590,8 +1590,6 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
       deploy: buildManifest.deploy,
     },
     indexMetadata,
-    simulatedVersion,
-    buildPath: destination.path,
   };
 
   await writeJSONFile(join(projectPath, ".triggerdeploy.json"), deployData, true);
@@ -1727,48 +1725,6 @@ async function registerOnlyDeploy(projectPath: string, dir: string, options: Dep
 
   const deployment = deploymentResponse.data;
   const version = deployment.version;
-
-  // TODO: Implement automatic image retagging
-  // Example ECR implementation:
-  // const sourceTag = deployData.imageTag; // e.g., localhost:5001/trigger/proj_abc:0f7d1460
-  // const targetTag = deployment.imageTag; // e.g., localhost:5001/trigger/proj_abc:20250725.10.prod
-  //
-  // // For ECR:
-  // const manifest = await x("aws", ["ecr", "batch-get-image",
-  //   "--repository-name", "trigger/proj_abc",
-  //   "--image-ids", "imageTag=0f7d1460",
-  //   "--output", "text",
-  //   "--query", "images[].imageManifest"
-  // ]);
-  // await x("aws", ["ecr", "put-image",
-  //   "--repository-name", "trigger/proj_abc",
-  //   "--image-tag", "20250725.10.prod",
-  //   "--image-manifest", manifest.stdout
-  // ]);
-
-  // Log retagging command for manual execution
-  if (deployData.imageTag && deployment.imageTag && deployData.imageTag !== deployment.imageTag) {
-    const sourceTag = deployData.imageTag.split(':').pop();
-    const targetTag = deployment.imageTag.split(':').pop();
-    const [registry, repoPath] = deployData.imageTag.split('/').slice(0, -1).join('/').split('/');
-    const repository = deployData.imageTag.split(':')[0].split('/').slice(-2).join('/');
-
-    logger.info(`\nImage needs retagging from ${sourceTag} to ${targetTag}`);
-    logger.info(`Run this command to retag:\n`);
-
-    if (deployData.imageTag.includes('.ecr.') && deployData.imageTag.includes('.amazonaws.com')) {
-      // ECR retagging command
-      logger.info(`MANIFEST=$(aws ecr batch-get-image --repository-name ${repository} --image-ids imageTag=${sourceTag} --output text --query 'images[].imageManifest')`);
-      logger.info(`aws ecr put-image --repository-name ${repository} --image-tag ${targetTag} --image-manifest "$MANIFEST"\n`);
-    } else {
-      // Local/Docker registry retagging
-      logger.info(`docker tag ${deployData.imageTag} ${deployment.imageTag}`);
-      logger.info(`docker push ${deployment.imageTag}\n`);
-    }
-
-    // Wait 5 seconds to give user time to see the command
-    await new Promise(resolve => setTimeout(resolve, 5000));
-  }
 
   const rawDeploymentLink = `${authorization.dashboardUrl}/projects/v3/${resolvedConfig.project}/deployments/${deployment.shortCode}`;
   const rawTestLink = `${authorization.dashboardUrl}/projects/v3/${

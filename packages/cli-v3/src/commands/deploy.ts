@@ -96,7 +96,6 @@ const DeployCommandOptions = CommonCommandOptions.extend({
   buildOnly: z.boolean().default(false),
   registerOnly: z.boolean().default(false),
   containerfileModule: z.string().optional(),
-  skipDigest: z.boolean().default(false),
 });
 
 type DeployCommandOptions = z.infer<typeof DeployCommandOptions>;
@@ -154,10 +153,6 @@ export function configureDeployCommand(program: Command) {
         .option(
           "--containerfile-module <module>",
           "Path to a JavaScript/TypeScript module that exports a containerfile template"
-        )
-        .option(
-          "--skip-digest",
-          "Skip sending the image digest when registering (for register-only mode)"
         )
     )
       .addOption(
@@ -596,7 +591,6 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
     cacheCompression: options.cacheCompression,
     compressionLevel: options.compressionLevel,
     forceCompression: options.forceCompression,
-    indexEnvVars: serverEnvVars.success ? serverEnvVars.data.variables : {},
     onLog: (logMessage) => {
       if (options.plain || isCI) {
         console.log(logMessage);
@@ -1647,7 +1641,9 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
     deploymentId: "offline",
     deploymentVersion: simulatedVersion,
     imageTag,
-    load: options.load,
+    // Force load so the host can extract index-metadata.json / index-error.json
+    // from the built image after the build completes.
+    load: true,
     contentHash: buildManifest.contentHash,
     compilationPath: destination.path,
     projectId: resolvedConfig.project,
@@ -1657,7 +1653,10 @@ async function buildOnlyDeploy(projectPath: string, dir: string, options: Deploy
     branchName: branch,
     authAccessToken: "",
     buildEnvVars: buildManifest.build.env,
-    indexEnvVars: {}, // No server env vars in build-only mode
+    // Tell the in-container indexer to skip API calls and write its results to disk;
+    // the host CLI will pick them up after the build (and register them later via
+    // `trigger deploy --register-only`).
+    offlineIndex: true,
     network: options.network,
     builder: options.builder,
   });
@@ -1992,7 +1991,7 @@ async function registerOnlyDeploy(projectPath: string, dir: string, options: Dep
   const finalizeResponse = await projectClient.client.finalizeDeployment(
     deployment.id,
     {
-      ...(options.skipDigest ? {} : { imageDigest: deployData.imageDigest }),
+      imageDigest: deployData.imageDigest,
       skipPromotion: options.skipPromotion,
     },
     (logMessage) => {

@@ -51,7 +51,7 @@ export interface BuildImageOptions {
   apiClient?: CliApiClient;
   branchName?: string;
   buildEnvVars?: Record<string, string | undefined>;
-  indexEnvVars?: Record<string, string>; // Environment variables for indexing
+  offlineIndex?: boolean; // When true, skip API-based indexing in the container
   onLog?: (log: string) => void;
 }
 
@@ -81,7 +81,7 @@ export async function buildImage(options: BuildImageOptions): Promise<BuildImage
     apiClient,
     branchName,
     buildEnvVars,
-    indexEnvVars,
+    offlineIndex,
     network,
     builder,
     compression,
@@ -112,7 +112,7 @@ export async function buildImage(options: BuildImageOptions): Promise<BuildImage
       apiClient,
       branchName,
       buildEnvVars,
-      indexEnvVars,
+      offlineIndex,
       network,
       builder,
       compression,
@@ -151,7 +151,7 @@ export async function buildImage(options: BuildImageOptions): Promise<BuildImage
     compression,
     compressionLevel,
     forceCompression,
-    indexEnvVars,
+    offlineIndex,
     onLog,
   });
 }
@@ -178,7 +178,7 @@ export interface DepotBuildImageOptions {
   compression?: "zstd" | "gzip";
   compressionLevel?: number;
   forceCompression?: boolean;
-  indexEnvVars?: Record<string, string>;
+  offlineIndex?: boolean;
   onLog?: (log: string) => void;
 }
 
@@ -239,8 +239,7 @@ async function remoteBuildImage(options: DepotBuildImageOptions): Promise<BuildI
     `TRIGGER_PREVIEW_BRANCH=${options.branchName ?? ""}`,
     "--build-arg",
     `TRIGGER_SECRET_KEY=${options.apiKey}`,
-    "--build-arg",
-    `TRIGGER_ENV_VARS=${JSON.stringify(options.indexEnvVars || {})}`,
+    ...(options.offlineIndex ? ["--build-arg", "TRIGGER_INDEX_OFFLINE=1"] : []),
     ...(buildArgs || []),
     ...(options.extraCACerts ? ["--build-arg", `NODE_EXTRA_CA_CERTS=${options.extraCACerts}`] : []),
     "--progress",
@@ -348,7 +347,7 @@ interface SelfHostedBuildImageOptions {
   useRegistryCache?: boolean;
   extraCACerts?: string;
   buildEnvVars?: Record<string, string | undefined>;
-  indexEnvVars?: Record<string, string>;
+  offlineIndex?: boolean;
   network?: string;
   builder: string;
   load?: boolean;
@@ -602,8 +601,7 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     `TRIGGER_PREVIEW_BRANCH=${options.branchName ?? ""}`,
     "--build-arg",
     `TRIGGER_SECRET_KEY=${options.apiKey}`,
-    "--build-arg",
-    `TRIGGER_ENV_VARS=${JSON.stringify(options.indexEnvVars || {})}`,
+    ...(options.offlineIndex ? ["--build-arg", "TRIGGER_INDEX_OFFLINE=1"] : []),
     ...(buildArgs || []),
     ...(options.extraCACerts ? ["--build-arg", `NODE_EXTRA_CA_CERTS=${options.extraCACerts}`] : []),
     "--progress",
@@ -1111,7 +1109,7 @@ ARG NODE_EXTRA_CA_CERTS
 ARG TRIGGER_SECRET_KEY
 ARG TRIGGER_API_URL
 ARG TRIGGER_PREVIEW_BRANCH
-ARG TRIGGER_ENV_VARS
+ARG TRIGGER_INDEX_OFFLINE
 
 ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
     TRIGGER_DEPLOYMENT_ID=\${TRIGGER_DEPLOYMENT_ID} \
@@ -1122,7 +1120,7 @@ ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
     TRIGGER_API_URL=\${TRIGGER_API_URL} \
     TRIGGER_PREVIEW_BRANCH=\${TRIGGER_PREVIEW_BRANCH} \
     NODE_EXTRA_CA_CERTS=\${NODE_EXTRA_CA_CERTS} \
-    TRIGGER_ENV_VARS=\${TRIGGER_ENV_VARS} \
+    TRIGGER_INDEX_OFFLINE=\${TRIGGER_INDEX_OFFLINE} \
     NODE_ENV=production
 
 ARG TARGETPLATFORM
@@ -1221,7 +1219,7 @@ ARG NODE_EXTRA_CA_CERTS
 ARG TRIGGER_SECRET_KEY
 ARG TRIGGER_API_URL
 ARG TRIGGER_PREVIEW_BRANCH
-ARG TRIGGER_ENV_VARS
+ARG TRIGGER_INDEX_OFFLINE
 
 ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
     TRIGGER_DEPLOYMENT_ID=\${TRIGGER_DEPLOYMENT_ID} \
@@ -1233,7 +1231,7 @@ ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
     TRIGGER_PREVIEW_BRANCH=\${TRIGGER_PREVIEW_BRANCH} \
     TRIGGER_LOG_LEVEL=debug \
     NODE_EXTRA_CA_CERTS=\${NODE_EXTRA_CA_CERTS} \
-    TRIGGER_ENV_VARS=\${TRIGGER_ENV_VARS} \
+    TRIGGER_INDEX_OFFLINE=\${TRIGGER_INDEX_OFFLINE} \
     NODE_ENV=production \
     NODE_OPTIONS="--max_old_space_size=8192"
 
@@ -1432,21 +1430,20 @@ function shouldPush(imageTag: string, push?: boolean) {
 
 // Don't load if we're pushing, unless the user explicitly wants to load
 function shouldLoad(load?: boolean, push?: boolean) {
-  return true; // We have to load the image for file extraction
-  // switch (load) {
-  //   case true: {
-  //     return true;
-  //   }
-  //   case false: {
-  //     return false;
-  //   }
-  //   case undefined: {
-  //     return push ? false : true;
-  //   }
-  //   default: {
-  //     assertExhaustive(load);
-  //   }
-  // }
+  switch (load) {
+    case true: {
+      return true;
+    }
+    case false: {
+      return false;
+    }
+    case undefined: {
+      return push ? false : true;
+    }
+    default: {
+      assertExhaustive(load);
+    }
+  }
 }
 
 function getOutputOptions({

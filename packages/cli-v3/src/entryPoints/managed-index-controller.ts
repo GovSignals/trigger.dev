@@ -21,17 +21,17 @@ import { writeJSONFile } from "../utilities/fileSystem.js";
  *      - Registers the resulting BackgroundWorker via the API.
  *      - Reports indexing failures via `failDeployment`.
  *
- *   2. **Offline mode (opt-in via `TRIGGER_ENV_VARS` build arg)**:
- *      - Reads environment variables from the `TRIGGER_ENV_VARS` JSON build arg
- *        (no API access required).
+ *   2. **Offline mode (opt-in via `TRIGGER_INDEX_OFFLINE=1` build arg)**:
+ *      - Skips the API entirely; no env vars are fetched and no
+ *        BackgroundWorker is registered from inside the container.
  *      - Writes `index-metadata.json` (and `index-error.json` on failure) to
  *        disk for the host-side CLI to read after the build.
  *      - Used by `trigger deploy --build-only` followed by
  *        `trigger deploy --register-only` to support build-and-register
  *        workflows where the build container has no network access to the API.
  *
- * Mode is selected by the presence of the `TRIGGER_ENV_VARS` env var. If unset,
- * the controller behaves exactly as it did before two-phase deploy was added.
+ * Mode is selected by the `TRIGGER_INDEX_OFFLINE=1` env var. If unset, the
+ * controller behaves exactly as it did before two-phase deploy was added.
  */
 
 async function loadBuildManifest() {
@@ -52,7 +52,6 @@ type OnlineBootstrap = {
 type OfflineBootstrap = {
   mode: "offline";
   buildManifest: BuildManifest;
-  envVars: Record<string, string>;
 };
 
 type BootstrapResult = OnlineBootstrap | OfflineBootstrap;
@@ -60,34 +59,12 @@ type BootstrapResult = OnlineBootstrap | OfflineBootstrap;
 async function bootstrap(): Promise<BootstrapResult> {
   const buildManifest = await loadBuildManifest();
 
-  // Offline mode: env vars are baked in via TRIGGER_ENV_VARS build arg.
-  if (typeof env.TRIGGER_ENV_VARS === "string") {
-    let envVars: Record<string, string> = {};
-    try {
-      const parsed = JSON.parse(env.TRIGGER_ENV_VARS);
-      if (
-        typeof parsed === "object" &&
-        parsed !== null &&
-        !Array.isArray(parsed) &&
-        Object.values(parsed).every((v) => typeof v === "string")
-      ) {
-        envVars = parsed as Record<string, string>;
-      } else {
-        console.error(
-          "TRIGGER_ENV_VARS must be a JSON object of string values; got:",
-          env.TRIGGER_ENV_VARS
-        );
-        process.exit(1);
-      }
-    } catch (e) {
-      console.error("Failed to parse TRIGGER_ENV_VARS:", e);
-      process.exit(1);
-    }
-
+  // Offline mode: API access is unavailable; the host CLI will read the
+  // index artifacts after the build and register them via --register-only.
+  if (env.TRIGGER_INDEX_OFFLINE === "1") {
     return {
       mode: "offline",
       buildManifest,
-      envVars,
     };
   }
 
@@ -130,7 +107,7 @@ async function indexDeployment(result: BootstrapResult) {
   try {
     const envVars =
       result.mode === "offline"
-        ? result.envVars
+        ? {}
         : await (async () => {
             const $env = await result.cliApiClient.getEnvironmentVariables(result.projectRef);
             if (!$env.success) {

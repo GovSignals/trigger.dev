@@ -7,7 +7,6 @@ import {
   DeploymentFinalizedEvent,
   DeploymentEventFromString,
   DeploymentTriggeredVia,
-  CreateBackgroundWorkerRequestBody,
 } from "@trigger.dev/core/v3/schemas";
 import { Command, Option as CommandOption } from "commander";
 import { join, relative, resolve } from "node:path";
@@ -48,7 +47,7 @@ import {
   prettyWarning,
 } from "../utilities/cliOutput.js";
 import { loadDotEnvVars } from "../utilities/dotEnv.js";
-import { isDirectory, writeJSONFile, readJSONFile, pathExists } from "../utilities/fileSystem.js";
+import { isDirectory } from "../utilities/fileSystem.js";
 import { setGithubActionsOutputAndEnvVars } from "../utilities/githubActions.js";
 import { createGitMeta, isGitHubActions } from "../utilities/gitMeta.js";
 import { printStandloneInitialBanner } from "../utilities/initialBanner.js";
@@ -60,8 +59,6 @@ import { spinner } from "../utilities/windows.js";
 import { login } from "./login.js";
 import { archivePreviewBranch } from "./preview.js";
 import { updateTriggerPackages } from "./update.js";
-import { alwaysExternal } from "@trigger.dev/core/v3/build";
-import { readdirSync } from "node:fs";
 
 const DeployCommandOptions = CommonCommandOptions.extend({
   dryRun: z.boolean().default(false),
@@ -261,14 +258,14 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
     intro(`Deploying project${options.skipPromotion ? " (without promotion)" : ""}`);
   }
 
+  if (!options.skipUpdateCheck) {
+    await updateTriggerPackages(dir, { ...options }, true, true);
+  }
+
   const cwd = process.cwd();
   const projectPath = resolve(cwd, dir);
 
   verifyDirectory(dir, projectPath);
-
-  if (!options.skipUpdateCheck) {
-    await updateTriggerPackages(dir, { ...options }, true, true);
-  }
 
   const authorization = await login({
     embedded: true,
@@ -619,7 +616,6 @@ async function _deployCommand(dir: string, options: DeployCommandOptions) {
 
     throw new SkipLoggingError("Failed to build image");
   }
-
 
   const getDeploymentResponse = await projectClient.client.getDeployment(deployment.id);
 
@@ -1199,7 +1195,7 @@ async function handleNativeBuildServerDeploy({
       case "log": {
         if (record.seqNum === 0) {
           $queuedSpinner.stop("Build started");
-          console.log("\u2502");
+          console.log("│");
           queuedSpinnerStopped = true;
         }
 
@@ -1229,7 +1225,7 @@ async function handleNativeBuildServerDeploy({
         // Ideally, we'd use clack's `taskLog` to only show the recent n lines of logs as they are streamed, but that also seems brittle
         // and has some issues with cursor movements/clearing lines that it shouldn't clear.
         // We can revisit this on future versions of `@clack/prompts`.
-        console.log(`\u2502  ${formattedTimestamp}  ${formattedMessage}`);
+        console.log(`│  ${formattedTimestamp}  ${formattedMessage}`);
         break;
       }
       case "finalized": {

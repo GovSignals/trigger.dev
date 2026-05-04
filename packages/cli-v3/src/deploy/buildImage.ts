@@ -5,7 +5,7 @@ import { BuildManifest, BuildRuntime } from "@trigger.dev/core/v3/schemas";
 import { networkInterfaces } from "os";
 import { join, resolve } from "path";
 import { safeReadJSONFile } from "../utilities/fileSystem.js";
-import { cpSync, mkdirSync, readFileSync, statSync } from "fs";
+import { mkdirSync, readFileSync, statSync } from "fs";
 
 import { isLinux } from "std-env";
 import { z } from "zod";
@@ -151,7 +151,6 @@ export async function buildImage(options: BuildImageOptions): Promise<BuildImage
     compression,
     compressionLevel,
     forceCompression,
-    offlineIndex,
     onLog,
   });
 }
@@ -178,7 +177,6 @@ export interface DepotBuildImageOptions {
   compression?: "zstd" | "gzip";
   compressionLevel?: number;
   forceCompression?: boolean;
-  offlineIndex?: boolean;
   onLog?: (log: string) => void;
 }
 
@@ -239,7 +237,6 @@ async function remoteBuildImage(options: DepotBuildImageOptions): Promise<BuildI
     `TRIGGER_PREVIEW_BRANCH=${options.branchName ?? ""}`,
     "--build-arg",
     `TRIGGER_SECRET_KEY=${options.apiKey}`,
-    ...(options.offlineIndex ? ["--build-arg", "TRIGGER_INDEX_OFFLINE=1"] : []),
     ...(buildArgs || []),
     ...(options.extraCACerts ? ["--build-arg", `NODE_EXTRA_CA_CERTS=${options.extraCACerts}`] : []),
     "--progress",
@@ -611,7 +608,7 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     ".", // The build context
   ].filter(Boolean) as string[];
 
-  logger.info(`docker ${args.join(" ")}`, { cwd: options.cwd });
+  logger.debug(`docker ${args.join(" ")}`, { cwd: options.cwd });
 
   const buildProcess = x("docker", args, {
     nodeOptions: {
@@ -898,27 +895,6 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
       logger.warn("Could not retrieve push digest from docker inspect");
     }
   }
-
-  // Copy the docker-export folder to the test directory
-  // const testDir = "/Users/conneraldrich/Development/Projects/govsignals/trigger.dev/references/v3-catalog/test";
-  // const dockerExportPath = join(options.cwd, "docker-export");
-  
-  // try {
-  //   // Ensure the test directory exists
-  //   mkdirSync(testDir, { recursive: true });
-
-  //   // Copy the docker-export folder to the test directory
-  //   cpSync(dockerExportPath, testDir, { recursive: true });
-    
-  //   logger.info(`Copied docker-export from ${dockerExportPath} to ${testDir}`);
-  //   options.onLog?.(`Copied docker-export to ${testDir}`);
-  // } catch (e) {
-  //   logger.error("Failed to copy docker-export to test directory", {
-  //     error: e instanceof Error ? e.message : JSON.stringify(e),
-  //     source: dockerExportPath,
-  //     destination: testDir,
-  //     });
-  //   }
 
   // Get the image size
   const sizeProcess = x("docker", ["image", "inspect", options.imageTag, "--format={{.Size}}"], {

@@ -146,46 +146,39 @@ export class InitializeDeploymentService extends BaseService {
 
       const deploymentShortCode = nanoid(8);
 
-      // If DEPLOY_IMAGE_OVERRIDE is set, use it instead of generating an image reference
-      let imageRef: string;
-      let isEcr = false;
-      let repoCreated = false;
+      const [imageRefError, imageRefResult] = await tryCatch(
+        (async () => {
+          if (env.DEPLOY_IMAGE_OVERRIDE) {
+            return {
+              imageRef: env.DEPLOY_IMAGE_OVERRIDE,
+              isEcr: false,
+              repoCreated: false,
+            };
+          }
 
-      if (env.DEPLOY_IMAGE_OVERRIDE) {
-        imageRef = env.DEPLOY_IMAGE_OVERRIDE;
-        logger.info("Using image override", {
-          imageRef,
-          environmentId: environment.id,
-          projectId: environment.projectId,
-          version: nextVersion,
-        });
-      } else {
-        const [imageRefError, imageRefResult] = await tryCatch(
-          getDeploymentImageRef({
+          return getDeploymentImageRef({
             registry: registryConfig,
             projectRef: environment.project.externalRef,
             nextVersion,
             environmentType: environment.type,
             deploymentShortCode,
-          })
-        );
-
-        if (imageRefError) {
-          logger.error("Failed to get deployment image ref", {
-            environmentId: environment.id,
-            projectId: environment.projectId,
-            version: nextVersion,
-            triggeredById: triggeredBy?.id,
-            type: payload.type,
-            cause: imageRefError.message,
           });
-          throw new ServiceValidationError("Failed to get deployment image ref");
-        }
+        })()
+      );
 
-        imageRef = imageRefResult.imageRef;
-        isEcr = imageRefResult.isEcr;
-        repoCreated = imageRefResult.repoCreated;
+      if (imageRefError) {
+        logger.error("Failed to get deployment image ref", {
+          environmentId: environment.id,
+          projectId: environment.projectId,
+          version: nextVersion,
+          triggeredById: triggeredBy?.id,
+          type: payload.type,
+          cause: imageRefError.message,
+        });
+        throw new ServiceValidationError("Failed to get deployment image ref");
       }
+
+      const { imageRef, isEcr, repoCreated } = imageRefResult;
 
       // We keep using `BUILDING` as the initial status if not explicitly set
       // to avoid changing the behavior for deployments not created in the build server.

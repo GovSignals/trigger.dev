@@ -182,20 +182,20 @@ export interface DepotBuildImageOptions {
   onLog?: (log: string) => void;
 }
 
-type BuildImageSuccess = {
+export type BuildImageSuccess = {
   ok: true;
   imageSizeBytes: number;
   logs: string;
   digest?: string;
 };
 
-type BuildImageFailure = {
+export type BuildImageFailure = {
   ok: false;
   error: string;
   logs: string;
 };
 
-type BuildImageResults = BuildImageSuccess | BuildImageFailure;
+export type BuildImageResults = BuildImageSuccess | BuildImageFailure;
 
 async function remoteBuildImage(options: DepotBuildImageOptions): Promise<BuildImageResults> {
   const buildArgs = Object.entries(options.buildEnvVars || {})

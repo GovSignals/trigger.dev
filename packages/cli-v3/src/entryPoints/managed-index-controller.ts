@@ -22,16 +22,18 @@ import { writeJSONFile } from "../utilities/fileSystem.js";
  *      - Reports indexing failures via `failDeployment`.
  *
  *   2. **Offline mode (opt-in via `TRIGGER_INDEX_OFFLINE=1` build arg)**:
- *      - Skips the API entirely; no env vars are fetched and no
- *        BackgroundWorker is registered from inside the container.
- *      - Writes `index-metadata.json` (and `index-error.json` on failure) to
- *        disk for the host-side CLI to read after the build.
- *      - Used by `trigger deploy --build-only` followed by
- *        `trigger deploy --register-only` to support build-and-register
- *        workflows where the build container has no network access to the API.
+ *      - Skips the API entirely; no env vars are fetched, no
+ *        BackgroundWorker is registered, no failures are reported.
+ *      - Writes `index-metadata.json` (or `index-error.json` on failure)
+ *        to the working directory inside the build container. The multi-stage
+ *        Containerfile copies them into the final image so downstream tooling
+ *        can read them out of the runtime image (and on failure the indexer
+ *        process exits non-zero, failing the build).
+ *      - Intended for self-hosted setups that drive the build via
+ *        `trigger.dev/internal`'s `buildImage({ offlineIndex: true })`
+ *        without API credentials in the build environment.
  *
- * Mode is selected by the `TRIGGER_INDEX_OFFLINE=1` env var. If unset, the
- * controller behaves exactly as it did before two-phase deploy was added.
+ * Mode is selected by the `TRIGGER_INDEX_OFFLINE=1` env var.
  */
 
 async function loadBuildManifest() {

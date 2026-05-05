@@ -329,8 +329,8 @@ supervisor:
       forceEnabled: true
       namespace: "" # Default: uses release namespace
       workerNodetypeLabel: "" # When set, runs will only be scheduled on nodes with "nodetype=<label>"
-      workerServiceAccount: "trigger-worker" # Service account name for worker pods (e.g. "trigger-worker")
-      workerAutomountServiceAccountToken: true # Whether to mount the SA token in worker pods. Keep false unless pods need K8s API access
+      workerServiceAccount: "" # Service account name for worker pods. Empty = use namespace's "default" SA. Set to e.g. "trigger-worker" to pin a dedicated SA.
+      workerAutomountServiceAccountToken: false # Whether to mount the SA token in worker pods. Keep false unless pods need K8s API access.
       ephemeralStorageSizeLimit: "" # Default: 10Gi
       ephemeralStorageSizeRequest: "" # Default: 2Gi´
     podCleaner:
@@ -464,10 +464,13 @@ supervisor:
 
 # Worker pod configuration
 worker:
-  # Service account for worker pods
+  # Service account for worker pods. Off by default — most setups can use
+  # the namespace's "default" SA, or set `supervisor.config.kubernetes.
+  # workerServiceAccount` to point at an externally-managed SA. Set
+  # `create: true` and pick a name to have the chart provision one.
   serviceAccount:
-    create: true # Set to true to create a service account for worker pods
-    name: "trigger-worker" # Name of the service account
+    create: false # Set to true to create a service account for worker pods
+    name: "" # Name of the service account (only used when create: true)
     annotations: {} # Annotations to add to the service account (e.g., for AWS IRSA, GCP Workload Identity)
 
   # RBAC configuration for worker pods.
@@ -645,7 +648,7 @@ clickhouse:
   image:
     # Use bitnami legacy repo
     repository: bitnamilegacy/clickhouse
-    # image: docker.io/bitnamilegacy/clickhouse:25.6.1-debian-12-r0
+    # image: docker.io/bitnamilegacy/clickhouse:25.7.5-debian-12-r0
 
   # TLS/Secure connection configuration
   secure: false # Set to true to use HTTPS and secure connections

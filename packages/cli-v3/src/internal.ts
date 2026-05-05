@@ -10,7 +10,7 @@
 // Build / deploy primitives
 export { loadConfig } from "./config.js";
 export { buildWorker } from "./build/buildWorker.js";
-export { buildImage } from "./deploy/buildImage.js";
+export { buildImage, parseGenerateOptions } from "./deploy/buildImage.js";
 
 // Auth + project-environment resolution. `login` reads TRIGGER_ACCESS_TOKEN
 // from the env when present (so it works in CI without a config file);

@@ -12,14 +12,11 @@ export { loadConfig } from "./config.js";
 export { buildWorker } from "./build/buildWorker.js";
 export { buildImage } from "./deploy/buildImage.js";
 
-// Typed API client used to drive the deploy / register / finalize endpoints
-// without falling back to raw HTTP from downstream scripts.
-export { CliApiClient } from "./apiClient.js";
-
 // Auth + project-environment resolution. `login` reads TRIGGER_ACCESS_TOKEN
 // from the env when present (so it works in CI without a config file);
 // `getProjectClient` performs the two-step engine API URL discovery and
-// returns an engine-bound CliApiClient.
+// returns an engine-bound CliApiClient that callers use for all subsequent
+// deploy/register/finalize/fail API calls.
 export { login } from "./commands/login.js";
 export { getProjectClient } from "./utilities/session.js";
 
@@ -30,11 +27,9 @@ export { syncEnvVarsWithServer } from "./commands/deploy.js";
 //   - resolveLocalEnvVars / loadDotEnvVars: read project-local .env files
 //   - createGitMeta: extract git metadata for the deployment record
 //   - getTmpDir: scoped temp directory with cleanup tracking
-//   - saveLogs: dump build logs to a file (--save-logs equivalent)
 //   - setGithubActionsOutputAndEnvVars: emit deployment metadata to GHA
 export { resolveLocalEnvVars } from "./utilities/localEnvVars.js";
 export { loadDotEnvVars } from "./utilities/dotEnv.js";
 export { createGitMeta } from "./utilities/gitMeta.js";
 export { getTmpDir } from "./utilities/tempDirectories.js";
-export { saveLogs } from "./deploy/logs.js";
 export { setGithubActionsOutputAndEnvVars } from "./utilities/githubActions.js";

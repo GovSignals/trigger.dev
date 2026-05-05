@@ -79,6 +79,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve repo owner (lowercase)
+        id: owner
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          echo "lc=${OWNER,,}" >> "$GITHUB_OUTPUT"
+
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
@@ -142,7 +148,7 @@ jobs:
           CHART_PACKAGE="/tmp/${{ env.CHART_NAME }}-${VERSION}.tgz"
 
           # Push to GHCR OCI registry
-          helm push "$CHART_PACKAGE" "oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts"
+          helm push "$CHART_PACKAGE" "oci://${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/charts"
 
       - name: Write run summary
         run: |
@@ -154,7 +160,7 @@ jobs:
             echo "**Install:**"
             echo '```bash'
             echo "helm upgrade --install trigger \\"
-            echo "  oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }} \\"
+            echo "  oci://${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/charts/${{ env.CHART_NAME }} \\"
             echo "  --version \"${{ steps.version.outputs.version }}\""
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
@@ -182,7 +188,7 @@ jobs:
             **Install:**
             ```bash
             helm upgrade --install trigger \
-              oci://ghcr.io/${{ github.repository_owner }}/charts/trigger \
+              oci://ghcr.io/${{ steps.owner.outputs.lc }}/charts/trigger \
               --version "${{ steps.version.outputs.version }}"
             ```
 

@@ -139,6 +139,13 @@ export class KubernetesWorkloadManager implements WorkloadManager {
                 ...(Object.keys(env.KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT).length > 0
                   ? { securityContext: env.KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT }
                   : {}),
+                ...(env.KUBERNETES_WORKER_ENV_FROM_SECRET
+                  ? {
+                      envFrom: [
+                        { secretRef: { name: env.KUBERNETES_WORKER_ENV_FROM_SECRET } },
+                      ],
+                    }
+                  : {}),
                 env: [
                   {
                     name: "TRIGGER_DEQUEUED_AT_MS",

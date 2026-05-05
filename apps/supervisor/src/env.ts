@@ -116,6 +116,13 @@ const Env = z
       "KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT",
       { valueValidator: JsonAny }
     ),
+    // Name of a Kubernetes Secret to envFrom-mount into every worker pod's
+    // container. Pulls every key/value pair in the secret as env vars on
+    // the worker. Resolved by the kubelet at pod creation time; the
+    // supervisor never reads the secret values, so this needs no extra
+    // RBAC. Use case: keep task-time secrets (DB URLs, API keys) in
+    // Kubernetes rather than syncing them through the trigger.dev webapp.
+    KUBERNETES_WORKER_ENV_FROM_SECRET: z.string().optional(),
     KUBERNETES_IMAGE_PULL_SECRETS: z.string().optional(), // csv
     KUBERNETES_EPHEMERAL_STORAGE_SIZE_LIMIT: z.string().default("10Gi"),
     KUBERNETES_EPHEMERAL_STORAGE_SIZE_REQUEST: z.string().default("2Gi"),

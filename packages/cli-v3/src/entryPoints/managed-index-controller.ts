@@ -43,20 +43,15 @@ async function loadBuildManifest() {
   return BuildManifest.parse(raw);
 }
 
-type OnlineBootstrap = {
-  mode: "online";
+// In offline mode (TRIGGER_INDEX_OFFLINE=1) the bootstrap skips API client
+// construction entirely. Downstream code treats `cliApiClient === undefined`
+// as the signal that we're running offline.
+type BootstrapResult = {
   buildManifest: BuildManifest;
-  cliApiClient: CliApiClient;
-  projectRef: string;
-  deploymentId: string;
+  cliApiClient?: CliApiClient;
+  projectRef?: string;
+  deploymentId?: string;
 };
-
-type OfflineBootstrap = {
-  mode: "offline";
-  buildManifest: BuildManifest;
-};
-
-type BootstrapResult = OnlineBootstrap | OfflineBootstrap;
 
 /**
  * Returns the same shape as `cliApiClient.getEnvironmentVariables` for the
@@ -71,13 +66,10 @@ const offlineEnvShim = () =>
 async function bootstrap(): Promise<BootstrapResult> {
   const buildManifest = await loadBuildManifest();
 
-  // Offline mode: API access is unavailable; the host CLI will read the
-  // index artifacts after the build and register them via --register-only.
+  // Offline mode: API access is unavailable. The artifacts produced by
+  // indexDeployment are baked into the final image by the Containerfile.
   if (env.TRIGGER_INDEX_OFFLINE === "1") {
-    return {
-      mode: "offline",
-      buildManifest,
-    };
+    return { buildManifest };
   }
 
   // Online mode (default): use the API for env vars and registration.
@@ -103,7 +95,6 @@ async function bootstrap(): Promise<BootstrapResult> {
   }
 
   return {
-    mode: "online",
     buildManifest,
     cliApiClient,
     projectRef: env.TRIGGER_PROJECT_REF,
@@ -111,16 +102,20 @@ async function bootstrap(): Promise<BootstrapResult> {
   };
 }
 
-async function indexDeployment(result: BootstrapResult) {
-  const { buildManifest } = result;
+async function indexDeployment({
+  cliApiClient,
+  projectRef,
+  deploymentId,
+  buildManifest,
+}: BootstrapResult) {
   const stdout: string[] = [];
   const stderr: string[] = [];
 
   try {
     const $env =
-      result.mode === "offline"
-        ? offlineEnvShim()
-        : await result.cliApiClient.getEnvironmentVariables(result.projectRef);
+      cliApiClient && projectRef
+        ? await cliApiClient.getEnvironmentVariables(projectRef)
+        : offlineEnvShim();
 
     if (!$env.success) {
       throw new Error(`Failed to fetch environment variables: ${$env.error}`);
@@ -154,9 +149,9 @@ async function indexDeployment(result: BootstrapResult) {
     const buildPlatform = process.env.BUILDPLATFORM;
     const targetPlatform = process.env.TARGETPLATFORM;
 
-    if (result.mode === "offline") {
-      // Two-phase deploy: write metadata to disk for the host CLI to register
-      // after the build via `trigger deploy --register-only`.
+    if (!cliApiClient || !deploymentId) {
+      // Offline mode: write metadata to disk; the multi-stage Containerfile
+      // copies it into the final image where downstream tooling reads it.
       const indexMetadata = {
         contentHash: buildManifest.contentHash,
         packageVersion: buildManifest.packageVersion,
@@ -207,8 +202,8 @@ async function indexDeployment(result: BootstrapResult) {
       targetPlatform,
     };
 
-    const createResponse = await result.cliApiClient.createDeploymentBackgroundWorker(
-      result.deploymentId,
+    const createResponse = await cliApiClient.createDeploymentBackgroundWorker(
+      deploymentId,
       backgroundWorkerBody
     );
 
@@ -238,14 +233,14 @@ async function indexDeployment(result: BootstrapResult) {
 
     console.error("Failed to index deployment", serialiedIndexError);
 
-    if (result.mode === "offline") {
-      // Write error to a file so the host CLI can retrieve it after the build.
+    if (cliApiClient && deploymentId) {
+      await cliApiClient.failDeployment(deploymentId, { error: serialiedIndexError });
+    } else {
+      // Offline mode: write error to disk so downstream tooling can surface it.
       await writeFile(
         join(process.cwd(), "index-error.json"),
         JSON.stringify({ error: serialiedIndexError }, null, 2)
       );
-    } else {
-      await result.cliApiClient.failDeployment(result.deploymentId, { error: serialiedIndexError });
     }
 
     process.exit(1);

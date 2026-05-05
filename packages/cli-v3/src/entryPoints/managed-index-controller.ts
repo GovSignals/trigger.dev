@@ -19,20 +19,33 @@ async function loadBuildManifest() {
   return BuildManifest.parse(raw);
 }
 
-async function bootstrap() {
+type OnlineBootstrap = {
+  buildManifest: BuildManifest;
+  cliApiClient: CliApiClient;
+  projectRef: string;
+  deploymentId: string;
+};
+
+type OfflineBootstrap = {
+  buildManifest: BuildManifest;
+  cliApiClient: CliApiClient;
+};
+
+type BootstrapResult = OnlineBootstrap | OfflineBootstrap;
+
+async function bootstrap(): Promise<BootstrapResult> {
   const buildManifest = await loadBuildManifest();
 
   // Offline mode (TRIGGER_INDEX_OFFLINE=1): swap in a CliApiClient shim that
   // writes the same payloads to disk that the real client would have sent
-  // over the wire. indexDeployment is unchanged — it just gets a different
-  // implementation of the same interface.
+  // over the wire. The build container has no project ref / deployment id
+  // in this mode — the shim doesn't read them — so we don't fake them here;
+  // the call site below provides placeholder values for indexDeployment's
+  // upstream-shaped signature.
   if (env.TRIGGER_INDEX_OFFLINE === "1") {
     return {
       buildManifest,
       cliApiClient: createOfflineCliApiClient(),
-      // The shim ignores these but the shape needs to match.
-      projectRef: env.TRIGGER_PROJECT_REF ?? "offline",
-      deploymentId: env.TRIGGER_DEPLOYMENT_ID ?? "offline",
     };
   }
 
@@ -65,14 +78,12 @@ async function bootstrap() {
   };
 }
 
-type BootstrapResult = Awaited<ReturnType<typeof bootstrap>>;
-
 async function indexDeployment({
   cliApiClient,
   projectRef,
   deploymentId,
   buildManifest,
-}: BootstrapResult) {
+}: OnlineBootstrap) {
   const stdout: string[] = [];
   const stderr: string[] = [];
 
@@ -225,6 +236,13 @@ function createOfflineCliApiClient(): CliApiClient {
   } as unknown as CliApiClient;
 }
 
-const results = await bootstrap();
+const result = await bootstrap();
 
-await indexDeployment(results);
+// In offline mode bootstrap doesn't carry projectRef/deploymentId — the shim
+// doesn't read them either. Provide placeholder strings here so indexDeployment
+// keeps its upstream-shaped signature.
+await indexDeployment(
+  "projectRef" in result
+    ? result
+    : { ...result, projectRef: "offline", deploymentId: "offline" }
+);

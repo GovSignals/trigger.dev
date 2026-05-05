@@ -29,6 +29,10 @@ type OnlineBootstrap = {
 type OfflineBootstrap = {
   buildManifest: BuildManifest;
   cliApiClient: CliApiClient;
+  // Fields that don't apply in offline mode but need to exist on the union
+  // so indexDeployment can keep upstream's destructured signature.
+  projectRef?: undefined;
+  deploymentId?: undefined;
 };
 
 type BootstrapResult = OnlineBootstrap | OfflineBootstrap;
@@ -83,12 +87,12 @@ async function indexDeployment({
   projectRef,
   deploymentId,
   buildManifest,
-}: OnlineBootstrap) {
+}: BootstrapResult) {
   const stdout: string[] = [];
   const stderr: string[] = [];
 
   try {
-    const $env = await cliApiClient.getEnvironmentVariables(projectRef);
+    const $env = await cliApiClient.getEnvironmentVariables(projectRef!);
 
     if (!$env.success) {
       throw new Error(`Failed to fetch environment variables: ${$env.error}`);
@@ -141,7 +145,7 @@ async function indexDeployment({
     };
 
     const createResponse = await cliApiClient.createDeploymentBackgroundWorker(
-      deploymentId,
+      deploymentId!,
       backgroundWorkerBody
     );
 
@@ -171,7 +175,7 @@ async function indexDeployment({
 
     console.error("Failed to index deployment", serialiedIndexError);
 
-    await cliApiClient.failDeployment(deploymentId, { error: serialiedIndexError });
+    await cliApiClient.failDeployment(deploymentId!, { error: serialiedIndexError });
 
     process.exit(1);
   }
@@ -236,13 +240,6 @@ function createOfflineCliApiClient(): CliApiClient {
   } as unknown as CliApiClient;
 }
 
-const result = await bootstrap();
+const results = await bootstrap();
 
-// In offline mode bootstrap doesn't carry projectRef/deploymentId — the shim
-// doesn't read them either. Provide placeholder strings here so indexDeployment
-// keeps its upstream-shaped signature.
-await indexDeployment(
-  "projectRef" in result
-    ? result
-    : { ...result, projectRef: "offline", deploymentId: "offline" }
-);
+await indexDeployment(results);

@@ -183,20 +183,20 @@ export interface DepotBuildImageOptions {
   onLog?: (log: string) => void;
 }
 
-export type BuildImageSuccess = {
+type BuildImageSuccess = {
   ok: true;
   imageSizeBytes: number;
   logs: string;
   digest?: string;
 };
 
-export type BuildImageFailure = {
+type BuildImageFailure = {
   ok: false;
   error: string;
   logs: string;
 };
 
-export type BuildImageResults = BuildImageSuccess | BuildImageFailure;
+type BuildImageResults = BuildImageSuccess | BuildImageFailure;
 
 async function remoteBuildImage(options: DepotBuildImageOptions): Promise<BuildImageResults> {
   const buildArgs = Object.entries(options.buildEnvVars || {})
@@ -761,7 +761,7 @@ export async function generateContainerfile(options: GenerateContainerfileOption
   }
 }
 
-export const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
+const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
   const buildArgs = Object.entries(options.build.env || {})
     .flatMap(([key]) => `ARG ${key}`)
     .join("\n");
@@ -790,7 +790,7 @@ export const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
 
 
 
-export async function generateBunContainerfile(options: GenerateContainerfileOptions) {
+async function generateBunContainerfile(options: GenerateContainerfileOptions) {
   const { baseImage, buildArgs, buildEnvVars, postInstallCommands, baseInstructions, packages } =
     parseGenerateOptions(options);
 
@@ -894,7 +894,7 @@ CMD []
   `;
 }
 
-export async function generateNodeContainerfile(options: GenerateContainerfileOptions) {
+async function generateNodeContainerfile(options: GenerateContainerfileOptions) {
   const { baseImage, buildArgs, buildEnvVars, postInstallCommands, baseInstructions, packages } =
     parseGenerateOptions(options);
 

@@ -56,6 +56,16 @@ type OfflineBootstrap = {
 
 type BootstrapResult = OnlineBootstrap | OfflineBootstrap;
 
+/**
+ * Returns the same shape as `cliApiClient.getEnvironmentVariables` for the
+ * offline path. We never have project env vars at index time in offline mode
+ * (the build container has no API access), so it's just an empty `variables`
+ * map wrapped in the success envelope so downstream code can branch once on
+ * `$env.success`.
+ */
+const offlineEnvShim = () =>
+  ({ success: true as const, data: { variables: {} as Record<string, string> } });
+
 async function bootstrap(): Promise<BootstrapResult> {
   const buildManifest = await loadBuildManifest();
 
@@ -105,23 +115,21 @@ async function indexDeployment(result: BootstrapResult) {
   const stderr: string[] = [];
 
   try {
-    const envVars =
+    const $env =
       result.mode === "offline"
-        ? {}
-        : await (async () => {
-            const $env = await result.cliApiClient.getEnvironmentVariables(result.projectRef);
-            if (!$env.success) {
-              throw new Error(`Failed to fetch environment variables: ${$env.error}`);
-            }
-            return $env.data.variables;
-          })();
+        ? offlineEnvShim()
+        : await result.cliApiClient.getEnvironmentVariables(result.projectRef);
+
+    if (!$env.success) {
+      throw new Error(`Failed to fetch environment variables: ${$env.error}`);
+    }
 
     const workerManifest = await indexWorkerManifest({
       runtime: buildManifest.runtime,
       indexWorkerPath: buildManifest.indexWorkerEntryPoint,
       buildManifestPath: "./build.json",
       nodeOptions: execOptionsForRuntime(buildManifest.runtime, buildManifest),
-      env: envVars,
+      env: $env.data.variables,
       otelHookExclude: buildManifest.otelImportHook?.exclude,
       otelHookInclude: buildManifest.otelImportHook?.include,
       handleStdout(data) {

@@ -715,34 +715,6 @@ const BASE_IMAGE: Record<BuildRuntime, string> = {
 
 const DEFAULT_PACKAGES = ["busybox", "ca-certificates", "dumb-init", "git", "openssl"];
 
-export const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
-  const buildArgs = Object.entries(options.build.env || {})
-    .flatMap(([key]) => `ARG ${key}`)
-    .join("\n");
-
-  const buildEnvVars = Object.entries(options.build.env || {})
-    .flatMap(([key]) => `ENV ${key}=$${key}`)
-    .join("\n");
-
-  const postInstallCommands = (options.build.commands || []).map((cmd) => `RUN ${cmd}`).join("\n");
-
-  const baseInstructions = (options.image?.instructions || []).join("\n");
-  const packages = Array.from(new Set(DEFAULT_PACKAGES.concat(options.image?.pkgs || []))).join(
-    " "
-  );
-
-  const baseImage = BASE_IMAGE[options.runtime];
-
-  return {
-    baseImage,
-    baseInstructions,
-    buildArgs,
-    buildEnvVars,
-    packages,
-    postInstallCommands,
-  };
-};
-
 async function loadContainerfileModule(modulePath: string): Promise<ContainerfileTemplate> {
   const absolutePath = resolve(modulePath);
   
@@ -791,6 +763,35 @@ export async function generateContainerfile(options: GenerateContainerfileOption
     }
   }
 }
+
+export const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
+  const buildArgs = Object.entries(options.build.env || {})
+    .flatMap(([key]) => `ARG ${key}`)
+    .join("\n");
+
+  const buildEnvVars = Object.entries(options.build.env || {})
+    .flatMap(([key]) => `ENV ${key}=$${key}`)
+    .join("\n");
+
+  const postInstallCommands = (options.build.commands || []).map((cmd) => `RUN ${cmd}`).join("\n");
+
+  const baseInstructions = (options.image?.instructions || []).join("\n");
+  const packages = Array.from(new Set(DEFAULT_PACKAGES.concat(options.image?.pkgs || []))).join(
+    " "
+  );
+
+  return {
+    baseImage: BASE_IMAGE[options.runtime],
+    baseInstructions,
+    buildArgs,
+    buildEnvVars,
+    packages,
+    postInstallCommands,
+  };
+};
+
+
+
 
 export async function generateBunContainerfile(options: GenerateContainerfileOptions) {
   const { baseImage, buildArgs, buildEnvVars, postInstallCommands, baseInstructions, packages } =

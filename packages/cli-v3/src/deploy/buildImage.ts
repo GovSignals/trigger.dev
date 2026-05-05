@@ -650,10 +650,7 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
   } else {
     logger.debug("Parsed metadata.json", { metadata: meta.data, path: metadataPath });
 
-    // Always use the manifest (list) digest. With --output type=image,push=true
-    // (selected by getOutputOptions when push is enabled) BuildKit reports the
-    // pushed manifest digest here, so we don't need a separate `docker inspect`
-    // to retrieve it.
+    // Always use the manifest (list) digest
     digest = meta.data["containerimage.digest"];
   }
 

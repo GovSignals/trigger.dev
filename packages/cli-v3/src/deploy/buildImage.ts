@@ -5,7 +5,7 @@ import { BuildManifest, BuildRuntime } from "@trigger.dev/core/v3/schemas";
 import { networkInterfaces } from "os";
 import { join, resolve } from "path";
 import { safeReadJSONFile } from "../utilities/fileSystem.js";
-import { mkdirSync, readFileSync, statSync } from "fs";
+import { readFileSync } from "fs";
 
 import { isLinux } from "std-env";
 import { z } from "zod";
@@ -577,7 +577,6 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     options.imagePlatform,
     options.network ? `--network=${options.network}` : undefined,
     addHost ? `--add-host=${addHost}` : undefined,
-    load ? "--load" : undefined,
     "--provenance",
     "false",
     "--metadata-file",
@@ -603,8 +602,6 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     ...(options.extraCACerts ? ["--build-arg", `NODE_EXTRA_CA_CERTS=${options.extraCACerts}`] : []),
     "--progress",
     "plain",
-    "-t",
-    options.imageTag,
     ".", // The build context
   ].filter(Boolean) as string[];
 
@@ -636,181 +633,12 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     };
   }
 
-  // Always extract files using docker cp
-  // Create the docker-export directory
-  const dockerExportDir = join(options.cwd, "docker-export");
-  logger.debug("Creating docker-export directory", { path: dockerExportDir });
-  mkdirSync(dockerExportDir, { recursive: true });
-
-  // Create a temporary container to extract files
-  const containerName = `trigger-extract-${Date.now()}`;
-  
-  logger.debug("Creating container for file extraction", { 
-    containerName, 
-    imageTag: options.imageTag,
-    cwd: options.cwd 
-  });
-  
-  const createProcess = x("docker", ["create", "--name", containerName, options.imageTag], {
-    nodeOptions: { cwd: options.cwd },
-  });
-  
-  for await (const line of createProcess) {
-    errors.push(line);
-    logger.debug(line);
-  }
-  
-  if (createProcess.exitCode !== 0) {
-    logger.error("Failed to create extraction container", { 
-      exitCode: createProcess.exitCode,
-      containerName,
-      imageTag: options.imageTag 
-    });
-    return {
-      ok: false as const,
-      error: "Error creating container for file extraction",
-      logs: extractLogs(errors),
-    };
-  }
-  
-  logger.debug("Container created successfully", { containerName });
-
-  // Extract the files we need
-  const filesToExtract = [
-    { source: "/app/index.json", dest: "index.json", required: true },
-    { source: "/app/index-metadata.json", dest: "index-metadata.json", required: true },
-    { source: "/app/index-error.json", dest: "index-error.json", required: false },
-  ];
-  
-  logger.debug("Starting file extraction", { 
-    filesToExtract,
-    targetDir: dockerExportDir 
-  });
-  
-  for (const { source, dest, required } of filesToExtract) {
-    logger.debug("Extracting file from container", { 
-      source, 
-      dest, 
-      required,
-      containerName,
-      targetPath: join(dockerExportDir, dest)
-    });
-    
-    const cpCommand = ["cp", `${containerName}:${source}`, "./docker-export/"];
-    logger.debug("Running docker cp command", { command: `docker ${cpCommand.join(" ")}` });
-    
-    const cpProcess = x("docker", cpCommand, {
-      nodeOptions: { cwd: options.cwd },
-    });
-    
-    const cpErrors: string[] = [];
-    for await (const line of cpProcess) {
-      cpErrors.push(line);
-      logger.debug(`docker cp output: ${line}`);
-    }
-    
-    logger.debug("Docker cp process completed", { 
-      exitCode: cpProcess.exitCode,
-      source,
-      errorCount: cpErrors.length
-    });
-    
-    if (cpProcess.exitCode !== 0) {
-      logger.error("Failed to extract file", { 
-        source, 
-        required, 
-        exitCode: cpProcess.exitCode,
-        errors: cpErrors 
-      });
-      
-      if (required) {
-        logger.error("Critical file extraction failed, cleaning up container");
-        // Clean up the container before failing
-        await x("docker", ["rm", containerName], { nodeOptions: { cwd: options.cwd } });
-        
-        return {
-          ok: false as const,
-          error: `Failed to extract critical file ${source} from container: ${cpErrors.join("\n")}`,
-          logs: extractLogs(errors),
-        };
-      } else {
-        logger.warn(`Failed to extract optional file ${source}, continuing...`);
-      }
-    } else {
-      logger.debug("File extraction successful", { source, dest });
-    }
-    
-    // Verify the file was actually copied
-    if (required) {
-      const extractedPath = join(options.cwd, "docker-export", dest);
-      logger.debug("Verifying extracted file", { path: extractedPath });
-      
-      try {
-        const stats = statSync(extractedPath);
-        if (!stats.isFile()) {
-          logger.error("Extracted path is not a file", { 
-            path: extractedPath, 
-            isDirectory: stats.isDirectory(),
-            mode: stats.mode 
-          });
-          
-          // Clean up the container before failing
-          logger.debug("Cleaning up container before failing");
-          await x("docker", ["rm", containerName], { nodeOptions: { cwd: options.cwd } });
-          
-          return {
-            ok: false as const,
-            error: `Extracted file ${dest} is not a valid file at ${extractedPath}`,
-            logs: extractLogs(errors),
-          };
-        }
-        logger.debug(`Successfully verified extracted file`, { 
-          source,
-          dest,
-          path: extractedPath,
-          sizeBytes: stats.size,
-          modified: stats.mtime
-        });
-      } catch (e) {
-        logger.error("Failed to verify extracted file", { 
-          path: extractedPath,
-          error: e instanceof Error ? e.message : String(e),
-          errorType: e?.constructor?.name
-        });
-        
-        // Clean up the container before failing
-        logger.debug("Cleaning up container before failing");
-        await x("docker", ["rm", containerName], { nodeOptions: { cwd: options.cwd } });
-        
-        return {
-          ok: false as const,
-          error: `Failed to verify extracted file ${dest}: ${e instanceof Error ? e.message : String(e)}`,
-          logs: extractLogs(errors),
-        };
-      }
-    }
-  }
-
-  logger.debug("All files extracted successfully, cleaning up container", { containerName });
-
-  // Clean up the container
-  const rmProcess = x("docker", ["rm", containerName], {
-    nodeOptions: { cwd: options.cwd },
-  });
-  
-  for await (const line of rmProcess) {
-    logger.debug(`docker rm output: ${line}`);
-  }
-  
-  logger.debug("Container cleanup completed", { exitCode: rmProcess.exitCode });
-
-  // Get the digest from the build metadata first
   const metadataPath = join(options.cwd, "metadata.json");
   const rawMetadata = await safeReadJSONFile(metadataPath);
 
   const meta = BuildKitMetadata.safeParse(rawMetadata);
 
-  let buildDigest: string | undefined;
+  let digest: string | undefined;
   if (!meta.success) {
     logger.error("Failed to parse metadata.json", {
       errors: meta.error.message,
@@ -818,82 +646,12 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     });
   } else {
     logger.debug("Parsed metadata.json", { metadata: meta.data, path: metadataPath });
-    buildDigest = meta.data["containerimage.digest"];
-    logger.info("Build digest from metadata.json", { buildDigest });
-  }
 
-  logger.debug("PUSH", push);
-
-  let finalDigest: string | undefined = buildDigest;
-
-  // If push is true, push the image
-  if (push) {
-    logger.debug("PUSHING IMAGE TO REGISTRY");
-    options.onLog?.("Pushing image to registry...");
-    
-    const pushProcess = x("docker", ["push", options.imageTag], {
-      nodeOptions: { cwd: options.cwd },
-    });
-    
-    for await (const line of pushProcess) {
-      errors.push(line);
-      logger.debug(line);
-      options.onLog?.(line);
-    }
-    
-    if (pushProcess.exitCode !== 0) {
-      return {
-        ok: false as const,
-        error: "Error pushing image to registry",
-        logs: extractLogs(errors),
-      };
-    }
-    
-    options.onLog?.("Image pushed successfully");
-    logger.debug("IMAGE PUSHED SUCCESSFULLY");
-
-    // Get the digest of the pushed image
-    const inspectProcess = x("docker", ["inspect", "--format={{index .RepoDigests 0}}", options.imageTag], {
-      nodeOptions: { cwd: options.cwd },
-    });
-    
-    let pushedDigest: string | undefined;
-    for await (const line of inspectProcess) {
-      if (line.trim()) {
-        // Extract just the digest part (after the @)
-        const parts = line.trim().split('@');
-        if (parts.length === 2) {
-          pushedDigest = parts[1];
-        }
-        break;
-      }
-    }
-    
-    if (pushedDigest) {
-      logger.info("Push digest from docker inspect", { pushedDigest });
-      finalDigest = pushedDigest;
-      
-      // IMPORTANT NOTE: We must use the pushed digest for the final digest or else shas don't match and this fails
-
-      // Compare digests
-      // if (buildDigest && buildDigest !== pushedDigest) {
-      //   logger.error("Digest mismatch detected!", {
-      //     buildDigest,
-      //     pushedDigest,
-      //     imageTag: options.imageTag,
-      //     imagePlatform: options.imagePlatform
-      //   });
-        
-      //   // For multi-platform builds, this is expected behavior
-      //   if (options.imagePlatform.includes(",")) {
-      //     logger.warn("Multi-platform build detected. Using pushed manifest list digest instead of build digest.");
-      //   } else {
-      //     throw new Error(`Digest mismatch: build digest (${buildDigest}) != push digest (${pushedDigest})`);
-      //   }
-      // }
-    } else {
-      logger.warn("Could not retrieve push digest from docker inspect");
-    }
+    // Always use the manifest (list) digest. With --output type=image,push=true
+    // (selected by getOutputOptions when push is enabled) BuildKit reports the
+    // pushed manifest digest here, so we don't need a separate `docker inspect`
+    // to retrieve it.
+    digest = meta.data["containerimage.digest"];
   }
 
   // Get the image size
@@ -924,7 +682,7 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
   return {
     ok: true as const,
     imageSizeBytes,
-    digest: finalDigest,
+    digest,
     logs: extractLogs(errors),
   };
 }

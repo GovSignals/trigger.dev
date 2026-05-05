@@ -172,6 +172,29 @@ webapp:
     #   mountPath: /etc/ssl/certs
     #   readOnly: true
 
+  # Extra containers added to the webapp pod (sidecars). Useful for
+  # in-pod TLS (nginx, envoy), log shippers, audit agents, etc.
+  extraContainers:
+    []
+    # - name: nginx-tls
+    #   image: nginx:alpine
+    #   ports:
+    #     - name: https-internal
+    #       containerPort: 3031
+    #   volumeMounts:
+    #     - name: nginx-config
+    #       mountPath: /etc/nginx/conf.d
+    #     - name: nginx-tls-certs
+    #       mountPath: /etc/nginx/tls
+
+  # Extra init containers added to the webapp pod, scheduled after the
+  # built-in `volume-permissions` init.
+  extraInitContainers:
+    []
+    # - name: wait-for-secrets
+    #   image: busybox
+    #   command: [...]
+
   # ServiceMonitor for Prometheus monitoring
   serviceMonitor:
     enabled: false

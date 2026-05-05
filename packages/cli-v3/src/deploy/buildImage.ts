@@ -53,6 +53,9 @@ export interface BuildImageOptions {
   buildEnvVars?: Record<string, string | undefined>;
   offlineIndex?: boolean; // When true, skip API-based indexing in the container
   onLog?: (log: string) => void;
+
+  // Optional deployment spinner
+  deploymentSpinner?: any; // Replace 'any' with the actual type if known
 }
 
 export async function buildImage(options: BuildImageOptions): Promise<BuildImageResults> {

@@ -19,7 +19,10 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  CHART_NAME: trigger
+  # Published OCI chart name. Distinct from upstream `trigger` so the
+  # GovSignals fork's vendored chart doesn't collide with the upstream
+  # package under ghcr.io/govsignals/charts/trigger.
+  CHART_NAME: vendored-upstream-trigger
 
 jobs:
   lint-and-test:
@@ -118,6 +121,10 @@ jobs:
             exit 1
           fi
           echo "✅ Chart.yaml version matches release version."
+
+      - name: Rename chart for vendored-upstream OCI publish
+        run: |
+          sed -i "s/^name:.*/name: ${{ env.CHART_NAME }}/" ./hosting/k8s/helm/Chart.yaml
 
       - name: Package Helm Chart
         run: |

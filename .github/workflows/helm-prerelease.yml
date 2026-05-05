@@ -24,7 +24,10 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  CHART_NAME: trigger
+  # Published OCI chart name. Distinct from upstream `trigger` so the
+  # GovSignals fork's vendored chart doesn't collide with the upstream
+  # package under ghcr.io/govsignals/charts/trigger.
+  CHART_NAME: vendored-upstream-trigger
 
 jobs:
   lint-and-test:
@@ -127,9 +130,10 @@ jobs:
           echo "version=$PRERELEASE_VERSION" >> $GITHUB_OUTPUT
           echo "Prerelease version: $PRERELEASE_VERSION"
 
-      - name: Update Chart.yaml with prerelease version
+      - name: Update Chart.yaml with prerelease version and rename chart
         run: |
           sed -i "s/^version:.*/version: ${{ steps.version.outputs.version }}/" ./hosting/k8s/helm/Chart.yaml
+          sed -i "s/^name:.*/name: ${{ env.CHART_NAME }}/" ./hosting/k8s/helm/Chart.yaml
 
       - name: Override appVersion
         if: github.event_name == 'workflow_dispatch' && inputs.app_version != ''
@@ -188,7 +192,7 @@ jobs:
             **Install:**
             ```bash
             helm upgrade --install trigger \
-              oci://ghcr.io/${{ steps.owner.outputs.lc }}/charts/trigger \
+              oci://ghcr.io/${{ steps.owner.outputs.lc }}/charts/${{ env.CHART_NAME }} \
               --version "${{ steps.version.outputs.version }}"
             ```
 

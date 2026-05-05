@@ -77,8 +77,13 @@ spec:
           image: {{ include "trigger-v4.webapp.volumePermissions.image" . }}
           imagePullPolicy: {{ .Values.webapp.volumePermissions.image.pullPolicy }}
           command: ['sh', '-c', 'mkdir -p /home/node/shared']
+          {{- with .Values.webapp.initContainers.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- else }}
           securityContext:
             runAsUser: 1000
+          {{- end }}
           volumeMounts:
             - name: shared
               mountPath: /home/node/shared
@@ -89,9 +94,14 @@ spec:
         - name: token-syncer
           image: {{ include "trigger-v4.webapp.tokenSyncer.image" . }}
           imagePullPolicy: {{ .Values.webapp.tokenSyncer.image.pullPolicy }}
+          {{- with .Values.webapp.sidecarContainers.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- else }}
           securityContext:
             runAsUser: 1000
             runAsNonRoot: true
+          {{- end }}
           command:
             - /bin/bash
             - -c

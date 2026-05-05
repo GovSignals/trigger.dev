@@ -195,6 +195,21 @@ webapp:
     #   image: busybox
     #   command: [...]
 
+  # Container-level securityContext applied to the built-in
+  # `volume-permissions` init container. When unset, defaults to
+  # `runAsUser: 1000`. Set this to enforce stricter pod-security
+  # admission (e.g. FIPS / FedRAMP / Pod Security Standards "restricted":
+  # `runAsNonRoot: true`, `allowPrivilegeEscalation: false`,
+  # `capabilities.drop: [ALL]`, `seccompProfile.type: RuntimeDefault`).
+  initContainers:
+    securityContext: {}
+
+  # Container-level securityContext applied to the built-in `token-syncer`
+  # sidecar. Same shape + intent as `webapp.initContainers.securityContext`.
+  # Defaults to `{ runAsUser: 1000, runAsNonRoot: true }` when unset.
+  sidecarContainers:
+    securityContext: {}
+
   # ServiceMonitor for Prometheus monitoring
   serviceMonitor:
     enabled: false

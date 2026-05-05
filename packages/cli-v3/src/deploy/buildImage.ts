@@ -787,9 +787,6 @@ const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
   };
 };
 
-
-
-
 async function generateBunContainerfile(options: GenerateContainerfileOptions) {
   const { baseImage, buildArgs, buildEnvVars, postInstallCommands, baseInstructions, packages } =
     parseGenerateOptions(options);

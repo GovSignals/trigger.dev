@@ -1,6 +1,11 @@
 #!/bin/sh
 set -xe
 
+if [ "$1" = "migrate" ]; then
+  echo "Running migrations only (entrypoint.sh migrate mode)"
+  SKIP_POSTGRES_MIGRATIONS=0
+fi
+
 if [ -n "$DATABASE_HOST" ]; then
   scripts/wait-for-it.sh ${DATABASE_HOST} -- echo "database is up"
 fi
@@ -37,6 +42,11 @@ elif [ "$SKIP_CLICKHOUSE_MIGRATIONS" = "1" ]; then
   echo "SKIP_CLICKHOUSE_MIGRATIONS=1, skipping ClickHouse migrations."
 else
   echo "CLICKHOUSE_URL not set, skipping ClickHouse migrations."
+fi
+
+if [ "$1" = "migrate" ]; then
+  echo "Migrations complete, exiting."
+  exit 0
 fi
 
 # Copy over required prisma files

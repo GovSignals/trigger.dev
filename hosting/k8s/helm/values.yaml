@@ -640,6 +640,23 @@ electric:
     # - name: CUSTOM_VAR
     #   value: "custom-value"
 
+  # Extra volumes added to the Electric pod. The Electric container always
+  # has an emptyDir at /app/persistent regardless of this list — that's
+  # required by the Electric runtime. Use `extraVolumes` for things like
+  # an enterprise CA bundle ConfigMap.
+  extraVolumes:
+    []
+    # - name: ca-bundle
+    #   configMap:
+    #     name: enterprise-ca-bundle
+
+  # Extra volume mounts added to the Electric container.
+  extraVolumeMounts:
+    []
+    # - name: ca-bundle
+    #   mountPath: /etc/ssl/enterprise-ca
+    #   readOnly: true
+
 # ClickHouse configuration
 # Subchart: https://github.com/bitnami/charts/tree/main/bitnami/clickhouse
 clickhouse:
@@ -755,6 +772,14 @@ s3:
     endpoint: "" # e.g., "https://s3.amazonaws.com" or "https://your-minio.com:9000"
     accessKeyId: "admin" # Default for internal MinIO - change for production
     secretAccessKey: "very-safe-password" # Default for internal MinIO - change for production
+    #
+    # IAM-based authentication (for AWS S3 with IRSA / GCP Workload Identity).
+    # When true, the webapp pod skips the OBJECT_STORE_ACCESS_KEY_ID /
+    # OBJECT_STORE_SECRET_ACCESS_KEY env vars entirely so the AWS SDK can
+    # fall back to its credential-provider chain (instance metadata,
+    # web-identity-token file, etc.). Pair with a ServiceAccount
+    # `eks.amazonaws.com/role-arn` annotation on `webapp.serviceAccount`.
+    useIam: false
     #
     # Secure credential management
     existingSecret: "" # Name of existing secret containing S3 credentials

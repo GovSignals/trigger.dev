@@ -89,6 +89,18 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.electric.resources | nindent 12 }}
+          volumeMounts:
+            - name: electric-persistent
+              mountPath: /app/persistent
+            {{- with .Values.electric.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: electric-persistent
+          emptyDir: {}
+        {{- with .Values.electric.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

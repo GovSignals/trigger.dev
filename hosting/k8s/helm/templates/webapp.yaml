@@ -303,6 +303,24 @@ spec:
                 secretKeyRef:
                   name: {{ include "trigger-v4.secretsName" . }}
                   key: MANAGED_WORKER_SECRET
+            {{- end }}
+            {{- /*
+            Object-store credentials are scoped independently of the four
+            session secrets above. Three branches:
+              1. s3.deploy           → mount from the chart's internal MinIO
+                                       creds (s3.auth.existingSecret or the
+                                       chart-managed s3-auth-* keys).
+              2. s3.external.useIam  → skip entirely. IRSA / Workload
+                                       Identity provides credentials to the
+                                       SDK; mounting OBJECT_STORE_* would
+                                       force static-key mode.
+              3. external static keys → s3.external.existingSecret, OR
+                                        s3.external.accessKeyId when the
+                                        chart is provisioning its own
+                                        secret (requires secrets.enabled
+                                        so secrets.yaml actually writes
+                                        s3-access-key-id).
+            */}}
             {{- if .Values.s3.deploy }}
             {{- if .Values.s3.auth.existingSecret }}
             - name: OBJECT_STORE_ACCESS_KEY_ID
@@ -327,7 +345,7 @@ spec:
                   name: {{ include "trigger-v4.secretsName" . }}
                   key: s3-auth-secret-access-key
             {{- end }}
-            {{- else }}
+            {{- else if not .Values.s3.external.useIam }}
             {{- if .Values.s3.external.existingSecret }}
             - name: OBJECT_STORE_ACCESS_KEY_ID
               valueFrom:
@@ -339,7 +357,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "trigger-v4.s3.external.secretName" . }}
                   key: {{ include "trigger-v4.s3.external.secretAccessKeyKey" . }}
-            {{- else if .Values.s3.external.accessKeyId }}
+            {{- else if and .Values.secrets.enabled .Values.s3.external.accessKeyId }}
             - name: OBJECT_STORE_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
@@ -350,7 +368,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "trigger-v4.secretsName" . }}
                   key: s3-secret-access-key
-            {{- end }}
             {{- end }}
             {{- end }}
             {{- if .Values.webapp.observability }}
@@ -387,7 +404,17 @@ spec:
             - name: INTERNAL_OTEL_METRIC_EXPORTER_INTERVAL_MS
               value: {{ .Values.webapp.observability.metrics.exporterIntervalMs | quote }}
             {{- end }}
-            {{- if and .Values.clickhouse.external.host .Values.clickhouse.external.existingSecret }}
+            {{- if .Values.clickhouse.deploy }}
+            - name: CLICKHOUSE_PASSWORD
+              {{- if .Values.clickhouse.auth.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.clickhouse.auth.existingSecret }}
+                  key: {{ .Values.clickhouse.auth.existingSecretKey | default "admin-password" }}
+              {{- else }}
+              value: {{ .Values.clickhouse.auth.password | quote }}
+              {{- end }}
+            {{- else if and .Values.clickhouse.external.host .Values.clickhouse.external.existingSecret }}
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef:

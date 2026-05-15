@@ -118,7 +118,11 @@ export class KubernetesWorkloadManager implements WorkloadManager {
               "app.kubernetes.io/component": "create",
             },
             ...(Object.keys(env.KUBERNETES_WORKER_POD_ANNOTATIONS).length > 0
-              ? { annotations: { ...env.KUBERNETES_WORKER_POD_ANNOTATIONS } }
+              ? {
+                  annotations: {
+                    ...env.KUBERNETES_WORKER_POD_ANNOTATIONS,
+                  } as Record<string, string>,
+                }
               : {}),
           },
           spec: {

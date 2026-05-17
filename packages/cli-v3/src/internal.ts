@@ -27,9 +27,7 @@ export { syncEnvVarsWithServer } from "./commands/deploy.js";
 //   - resolveLocalEnvVars / loadDotEnvVars: read project-local .env files
 //   - createGitMeta: extract git metadata for the deployment record
 //   - getTmpDir: scoped temp directory with cleanup tracking
-//   - setGithubActionsOutputAndEnvVars: emit deployment metadata to GHA
 export { resolveLocalEnvVars } from "./utilities/localEnvVars.js";
 export { loadDotEnvVars } from "./utilities/dotEnv.js";
 export { createGitMeta } from "./utilities/gitMeta.js";
 export { getTmpDir } from "./utilities/tempDirectories.js";
-export { setGithubActionsOutputAndEnvVars } from "./utilities/githubActions.js";

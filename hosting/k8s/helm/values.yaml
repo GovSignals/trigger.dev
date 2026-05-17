@@ -462,34 +462,6 @@ supervisor:
   tolerations: []
   affinity: {}
 
-# Worker pod configuration
-worker:
-  # Service account for worker pods. Off by default — most setups can use
-  # the namespace's "default" SA, or set `supervisor.config.kubernetes.
-  # workerServiceAccount` to point at an externally-managed SA. Set
-  # `create: true` and pick a name to have the chart provision one.
-  serviceAccount:
-    create: false # Set to true to create a service account for worker pods
-    name: "" # Name of the service account (only used when create: true)
-    annotations: {} # Annotations to add to the service account (e.g., for AWS IRSA, GCP Workload Identity)
-
-  # RBAC configuration for worker pods.
-  #
-  # `create: false` is the default — most setups (including AWS IRSA and GCP
-  # Workload Identity) authenticate to cloud APIs rather than the Kubernetes
-  # API, so worker pods don't need a Role at all.
-  #
-  # When `create: true`, an empty Role is rendered and the operator MUST
-  # supply explicit least-privilege rules via `worker.rbac.rules` below.
-  rbac:
-    create: false
-    rules:
-      []
-      # - apiGroups: [""]
-      #   resources: ["configmaps"]
-      #   resourceNames: ["my-runtime-config"]
-      #   verbs: ["get"]
-
 # PostgreSQL configuration
 # Subchart: https://github.com/bitnami/charts/tree/main/bitnami/postgresql
 postgres:

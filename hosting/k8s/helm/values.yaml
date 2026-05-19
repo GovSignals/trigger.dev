@@ -172,6 +172,44 @@ webapp:
     #   mountPath: /etc/ssl/certs
     #   readOnly: true
 
+  # Extra containers added to the webapp pod (sidecars). Useful for
+  # in-pod TLS (nginx, envoy), log shippers, audit agents, etc.
+  extraContainers:
+    []
+    # - name: nginx-tls
+    #   image: nginx:alpine
+    #   ports:
+    #     - name: https-internal
+    #       containerPort: 3031
+    #   volumeMounts:
+    #     - name: nginx-config
+    #       mountPath: /etc/nginx/conf.d
+    #     - name: nginx-tls-certs
+    #       mountPath: /etc/nginx/tls
+
+  # Extra init containers added to the webapp pod, scheduled after the
+  # built-in `volume-permissions` init.
+  extraInitContainers:
+    []
+    # - name: wait-for-secrets
+    #   image: busybox
+    #   command: [...]
+
+  # Container-level securityContext applied to the built-in
+  # `volume-permissions` init container. When unset, defaults to
+  # `runAsUser: 1000`. Set this to enforce stricter pod-security
+  # admission (e.g. FIPS / FedRAMP / Pod Security Standards "restricted":
+  # `runAsNonRoot: true`, `allowPrivilegeEscalation: false`,
+  # `capabilities.drop: [ALL]`, `seccompProfile.type: RuntimeDefault`).
+  initContainers:
+    securityContext: {}
+
+  # Container-level securityContext applied to the built-in `token-syncer`
+  # sidecar. Same shape + intent as `webapp.initContainers.securityContext`.
+  # Defaults to `{ runAsUser: 1000, runAsNonRoot: true }` when unset.
+  sidecarContainers:
+    securityContext: {}
+
   # ServiceMonitor for Prometheus monitoring
   serviceMonitor:
     enabled: false

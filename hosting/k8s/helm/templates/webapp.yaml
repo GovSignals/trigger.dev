@@ -374,7 +374,17 @@ spec:
             - name: INTERNAL_OTEL_METRIC_EXPORTER_INTERVAL_MS
               value: {{ .Values.webapp.observability.metrics.exporterIntervalMs | quote }}
             {{- end }}
-            {{- if and .Values.clickhouse.external.host .Values.clickhouse.external.existingSecret }}
+            {{- if .Values.clickhouse.deploy }}
+            - name: CLICKHOUSE_PASSWORD
+              {{- if .Values.clickhouse.auth.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.clickhouse.auth.existingSecret }}
+                  key: {{ .Values.clickhouse.auth.existingSecretKey | default "admin-password" }}
+              {{- else }}
+              value: {{ .Values.clickhouse.auth.password | quote }}
+              {{- end }}
+            {{- else if and .Values.clickhouse.external.host .Values.clickhouse.external.existingSecret }}
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef:

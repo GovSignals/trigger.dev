@@ -401,11 +401,14 @@ ClickHouse hostname
 {{/*
 ClickHouse URL for application (with secure parameter)
 
-Note on the external+existingSecret branch: the password is expanded via
+Note on `$(CLICKHOUSE_PASSWORD)`: the password is expanded via
 Kubernetes' `$(VAR)` syntax, not shell `${VAR}`. Kubelet substitutes
 `$(CLICKHOUSE_PASSWORD)` at container-creation time from the
 CLICKHOUSE_PASSWORD env var declared just before CLICKHOUSE_URL in
-webapp.yaml. Shell-style `${...}` does not work here because
+webapp.yaml. Both the `deploy: true` and external+existingSecret
+branches use this placeholder so that the chart never bakes the
+password literal into a rendered URL string. Shell-style `${...}`
+does not work here because
 `docker/scripts/entrypoint.sh` assigns CLICKHOUSE_URL to GOOSE_DBSTRING
 with a single-pass expansion (`export GOOSE_DBSTRING="$CLICKHOUSE_URL"`),
 so any inner `${...}` reaches goose verbatim and fails URL parsing.
@@ -418,7 +421,7 @@ hex-encoded password or percent-encode before storing in the Secret.
 {{- if .Values.clickhouse.deploy -}}
 {{- $protocol := ternary "https" "http" .Values.clickhouse.secure -}}
 {{- $secure := ternary "true" "false" .Values.clickhouse.secure -}}
-{{ $protocol }}://{{ .Values.clickhouse.auth.username }}:{{ .Values.clickhouse.auth.password }}@{{ include "trigger-v4.clickhouse.hostname" . }}:8123?secure={{ $secure }}
+{{ $protocol }}://{{ .Values.clickhouse.auth.username }}:$(CLICKHOUSE_PASSWORD)@{{ include "trigger-v4.clickhouse.hostname" . }}:8123?secure={{ $secure }}
 {{- else if .Values.clickhouse.external.host -}}
 {{- $protocol := ternary "https" "http" .Values.clickhouse.external.secure -}}
 {{- $secure := ternary "true" "false" .Values.clickhouse.external.secure -}}
@@ -439,7 +442,7 @@ applies to the replication URL.
 {{- define "trigger-v4.clickhouse.replication.url" -}}
 {{- if .Values.clickhouse.deploy -}}
 {{- $protocol := ternary "https" "http" .Values.clickhouse.secure -}}
-{{ $protocol }}://{{ .Values.clickhouse.auth.username }}:{{ .Values.clickhouse.auth.password }}@{{ include "trigger-v4.clickhouse.hostname" . }}:8123
+{{ $protocol }}://{{ .Values.clickhouse.auth.username }}:$(CLICKHOUSE_PASSWORD)@{{ include "trigger-v4.clickhouse.hostname" . }}:8123
 {{- else if .Values.clickhouse.external.host -}}
 {{- $protocol := ternary "https" "http" .Values.clickhouse.external.secure -}}
 {{- if .Values.clickhouse.external.existingSecret -}}

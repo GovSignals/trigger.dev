@@ -550,7 +550,16 @@ clickhouse:
   # Bitnami ClickHouse chart configuration (when deploy: true)
   auth:
     username: "default"
-    password: "password"
+    password: "password" # Optional - ignored if existingSecret is set
+    #
+    # Secure credential management. When set, the chart resolves
+    # CLICKHOUSE_PASSWORD from this Secret (via Kubernetes' `$(VAR)` env
+    # substitution in the rendered URL) instead of baking the literal
+    # `password` above into the URL helper. The Bitnami ClickHouse
+    # subchart also reads the same fields, so the running ClickHouse
+    # pod and the webapp agree on the password.
+    existingSecret: "" # Name of existing secret containing password
+    existingSecretKey: "admin-password" # Key in existing secret containing password
 
   # Single-node configuration (disable clustering for dev/test)
   keeper:

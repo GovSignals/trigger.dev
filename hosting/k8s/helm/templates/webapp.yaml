@@ -314,7 +314,7 @@ spec:
                   name: {{ include "trigger-v4.secretsName" . }}
                   key: s3-auth-secret-access-key
             {{- end }}
-            {{- else }}
+            {{- else if not .Values.s3.external.useIam }}
             {{- if .Values.s3.external.existingSecret }}
             - name: OBJECT_STORE_ACCESS_KEY_ID
               valueFrom:

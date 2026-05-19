@@ -650,6 +650,14 @@ s3:
     accessKeyId: "admin" # Default for internal MinIO - change for production
     secretAccessKey: "very-safe-password" # Default for internal MinIO - change for production
     #
+    # IAM-based authentication (for AWS S3 with IRSA / GCP Workload Identity).
+    # When true, the webapp pod skips the OBJECT_STORE_ACCESS_KEY_ID /
+    # OBJECT_STORE_SECRET_ACCESS_KEY env vars entirely so the AWS SDK can
+    # fall back to its credential-provider chain (instance metadata,
+    # web-identity-token file, etc.). Pair with a ServiceAccount
+    # `eks.amazonaws.com/role-arn` annotation on `webapp.serviceAccount`.
+    useIam: false
+    #
     # Secure credential management
     existingSecret: "" # Name of existing secret containing S3 credentials
     existingSecretAccessKeyIdKey: "access-key-id" # Key in existing secret containing access key ID

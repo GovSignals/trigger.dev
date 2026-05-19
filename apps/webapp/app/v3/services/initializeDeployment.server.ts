@@ -198,13 +198,23 @@ export class InitializeDeploymentService extends BaseService {
         environment.id,
         async (nextVersion) => {
           const [imageRefError, imageRefResult] = await tryCatch(
-            getDeploymentImageRef({
-              registry: registryConfig,
-              projectRef: environment.project.externalRef,
-              nextVersion,
-              environmentType: environment.type,
-              deploymentShortCode,
-            })
+            (async () => {
+              if (env.DEPLOY_IMAGE_OVERRIDE) {
+                return {
+                  imageRef: env.DEPLOY_IMAGE_OVERRIDE,
+                  isEcr: false,
+                  repoCreated: false,
+                };
+              }
+
+              return getDeploymentImageRef({
+                registry: registryConfig,
+                projectRef: environment.project.externalRef,
+                nextVersion,
+                environmentType: environment.type,
+                deploymentShortCode,
+              });
+            })()
           );
 
           if (imageRefError) {

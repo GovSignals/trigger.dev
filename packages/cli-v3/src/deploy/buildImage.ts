@@ -3,7 +3,7 @@ import { depot } from "@depot/cli";
 import { x } from "tinyexec";
 import { BuildManifest, BuildRuntime } from "@trigger.dev/core/v3/schemas";
 import { networkInterfaces } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
 import { safeReadJSONFile } from "../utilities/fileSystem.js";
 import { readFileSync } from "fs";
 
@@ -12,6 +12,8 @@ import { z } from "zod";
 import { assertExhaustive } from "../utilities/assertExhaustive.js";
 import { tryCatch } from "@trigger.dev/core";
 import { CliApiClient } from "../apiClient.js";
+import { pathToFileURL } from "url";
+import type { ContainerfileTemplate } from "./containerfile-template.js";
 
 export interface BuildImageOptions {
   // Common options
@@ -46,9 +48,10 @@ export interface BuildImageOptions {
   extraCACerts?: string;
   apiUrl: string;
   apiKey: string;
-  apiClient: CliApiClient;
+  apiClient?: CliApiClient;
   branchName?: string;
   buildEnvVars?: Record<string, string | undefined>;
+  offlineIndex?: boolean; // When true, skip API-based indexing in the container
   onLog?: (log: string) => void;
 
   // Optional deployment spinner
@@ -81,6 +84,7 @@ export async function buildImage(options: BuildImageOptions): Promise<BuildImage
     apiClient,
     branchName,
     buildEnvVars,
+    offlineIndex,
     network,
     builder,
     compression,
@@ -111,6 +115,7 @@ export async function buildImage(options: BuildImageOptions): Promise<BuildImage
       apiClient,
       branchName,
       buildEnvVars,
+      offlineIndex,
       network,
       builder,
       compression,
@@ -336,12 +341,13 @@ interface SelfHostedBuildImageOptions {
   authenticateToRegistry?: boolean;
   apiUrl: string;
   apiKey: string;
-  apiClient: CliApiClient;
+  apiClient?: CliApiClient;
   branchName?: string;
   noCache?: boolean;
   useRegistryCache?: boolean;
   extraCACerts?: string;
   buildEnvVars?: Record<string, string | undefined>;
+  offlineIndex?: boolean;
   network?: string;
   builder: string;
   load?: boolean;
@@ -487,6 +493,14 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
       };
     }
 
+    if (!apiClient) {
+      return {
+        ok: false as const,
+        error: "API client is required for registry authentication",
+        logs: "",
+      };
+    }
+
     const [credentialsError, credentials] = await tryCatch(
       getDockerUsernameAndPassword(apiClient, deploymentId)
     );
@@ -586,6 +600,7 @@ async function localBuildImage(options: SelfHostedBuildImageOptions): Promise<Bu
     `TRIGGER_PREVIEW_BRANCH=${options.branchName ?? ""}`,
     "--build-arg",
     `TRIGGER_SECRET_KEY=${options.apiKey}`,
+    ...(options.offlineIndex ? ["--build-arg", "TRIGGER_INDEX_OFFLINE=1"] : []),
     ...(buildArgs || []),
     ...(options.extraCACerts ? ["--build-arg", `NODE_EXTRA_CA_CERTS=${options.extraCACerts}`] : []),
     "--progress",
@@ -685,6 +700,7 @@ export type GenerateContainerfileOptions = {
   image: BuildManifest["image"];
   indexScript: string;
   entrypoint: string;
+  containerfileModule?: string;
 };
 
 const BASE_IMAGE: Record<BuildRuntime, string> = {
@@ -696,7 +712,44 @@ const BASE_IMAGE: Record<BuildRuntime, string> = {
 
 const DEFAULT_PACKAGES = ["busybox", "ca-certificates", "dumb-init", "git", "openssl"];
 
+async function loadContainerfileModule(modulePath: string): Promise<ContainerfileTemplate> {
+  const absolutePath = resolve(modulePath);
+  
+  try {
+    // Convert to file URL for proper ESM import
+    const moduleUrl = pathToFileURL(absolutePath).href;
+    
+    // Dynamic import of the module
+    const module = await import(moduleUrl);
+    
+    // Return the default export
+    if (!module.default) {
+      throw new Error(`Module ${modulePath} does not have a default export`);
+    }
+    
+    return module.default;
+  } catch (error) {
+    logger.error(`Failed to load containerfile module from ${modulePath}`, error);
+    throw new Error(`Failed to load containerfile module: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export async function generateContainerfile(options: GenerateContainerfileOptions) {
+  // If a custom module is specified, use it
+  if (options.containerfileModule) {
+    try {
+      const template = await loadContainerfileModule(options.containerfileModule);
+      
+      // Pass the full options directly to the template for complete control
+      const containerfile = await template.generate(options);
+      return containerfile;
+    } catch (error) {
+      logger.error("Failed to generate containerfile from module", error);
+      throw error;
+    }
+  }
+  
+  // Fall back to built-in templates
   switch (options.runtime) {
     case "node":
     case "node-22": {
@@ -788,6 +841,7 @@ ARG NODE_EXTRA_CA_CERTS
 ARG TRIGGER_SECRET_KEY
 ARG TRIGGER_API_URL
 ARG TRIGGER_PREVIEW_BRANCH
+ARG TRIGGER_INDEX_OFFLINE
 
 ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
     TRIGGER_DEPLOYMENT_ID=\${TRIGGER_DEPLOYMENT_ID} \
@@ -798,6 +852,7 @@ ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
     TRIGGER_API_URL=\${TRIGGER_API_URL} \
     TRIGGER_PREVIEW_BRANCH=\${TRIGGER_PREVIEW_BRANCH} \
     NODE_EXTRA_CA_CERTS=\${NODE_EXTRA_CA_CERTS} \
+    TRIGGER_INDEX_OFFLINE=\${TRIGGER_INDEX_OFFLINE} \
     NODE_ENV=production
 
 ARG TARGETPLATFORM
@@ -896,6 +951,7 @@ ARG NODE_EXTRA_CA_CERTS
 ARG TRIGGER_SECRET_KEY
 ARG TRIGGER_API_URL
 ARG TRIGGER_PREVIEW_BRANCH
+ARG TRIGGER_INDEX_OFFLINE
 
 ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
     TRIGGER_DEPLOYMENT_ID=\${TRIGGER_DEPLOYMENT_ID} \
@@ -907,6 +963,7 @@ ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
     TRIGGER_PREVIEW_BRANCH=\${TRIGGER_PREVIEW_BRANCH} \
     TRIGGER_LOG_LEVEL=debug \
     NODE_EXTRA_CA_CERTS=\${NODE_EXTRA_CA_CERTS} \
+    TRIGGER_INDEX_OFFLINE=\${TRIGGER_INDEX_OFFLINE} \
     NODE_ENV=production \
     NODE_OPTIONS="--max_old_space_size=8192"
 
@@ -938,8 +995,11 @@ ENV TRIGGER_PROJECT_ID=\${TRIGGER_PROJECT_ID} \
 # Copy the files from the install stage
 COPY --from=build --chown=node:node /app ./
 
-# Copy the index.json file from the indexer stage
+# Copy the index.json file from the indexer stage if it exists
 COPY --from=indexer --chown=node:node /app/index.json ./
+COPY --from=indexer --chown=node:node /app/index-metadata.json ./
+# index-error.json is optional - it only exists if indexing failed
+COPY --from=indexer --chown=node:node /app/index-error.json* ./
 
 ENTRYPOINT [ "dumb-init", "node", "${options.entrypoint}" ]
 CMD []

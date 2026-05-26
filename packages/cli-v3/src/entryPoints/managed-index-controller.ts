@@ -19,8 +19,39 @@ async function loadBuildManifest() {
   return BuildManifest.parse(raw);
 }
 
-async function bootstrap() {
+type OnlineBootstrap = {
+  buildManifest: BuildManifest;
+  cliApiClient: CliApiClient;
+  projectRef: string;
+  deploymentId: string;
+};
+
+type OfflineBootstrap = {
+  buildManifest: BuildManifest;
+  cliApiClient: CliApiClient;
+  // Fields that don't apply in offline mode but need to exist on the union
+  // so indexDeployment can keep upstream's destructured signature.
+  projectRef?: undefined;
+  deploymentId?: undefined;
+};
+
+type BootstrapResult = OnlineBootstrap | OfflineBootstrap;
+
+async function bootstrap(): Promise<BootstrapResult> {
   const buildManifest = await loadBuildManifest();
+
+  // Offline mode (TRIGGER_INDEX_OFFLINE=1): swap in a CliApiClient shim that
+  // writes the same payloads to disk that the real client would have sent
+  // over the wire. The build container has no project ref / deployment id
+  // in this mode — the shim doesn't read them — so we don't fake them here;
+  // the call site below provides placeholder values for indexDeployment's
+  // upstream-shaped signature.
+  if (env.TRIGGER_INDEX_OFFLINE === "1") {
+    return {
+      buildManifest,
+      cliApiClient: createOfflineCliApiClient(),
+    };
+  }
 
   if (typeof env.TRIGGER_API_URL !== "string") {
     console.error("TRIGGER_API_URL is not set");
@@ -51,8 +82,6 @@ async function bootstrap() {
   };
 }
 
-type BootstrapResult = Awaited<ReturnType<typeof bootstrap>>;
-
 async function indexDeployment({
   cliApiClient,
   projectRef,
@@ -63,7 +92,7 @@ async function indexDeployment({
   const stderr: string[] = [];
 
   try {
-    const $env = await cliApiClient.getEnvironmentVariables(projectRef);
+    const $env = await cliApiClient.getEnvironmentVariables(projectRef!);
 
     if (!$env.success) {
       throw new Error(`Failed to fetch environment variables: ${$env.error}`);
@@ -117,7 +146,7 @@ async function indexDeployment({
     };
 
     const createResponse = await cliApiClient.createDeploymentBackgroundWorker(
-      deploymentId,
+      deploymentId!,
       backgroundWorkerBody
     );
 
@@ -147,10 +176,69 @@ async function indexDeployment({
 
     console.error("Failed to index deployment", serialiedIndexError);
 
-    await cliApiClient.failDeployment(deploymentId, { error: serialiedIndexError });
+    await cliApiClient.failDeployment(deploymentId!, { error: serialiedIndexError });
 
     process.exit(1);
   }
+}
+
+/**
+ * Stub `CliApiClient` for offline indexing (TRIGGER_INDEX_OFFLINE=1).
+ *
+ * indexDeployment makes three calls on the API client:
+ *
+ *   1. `getEnvironmentVariables(projectRef)` — returns an empty `variables`
+ *      map. The build container has no API access in offline mode, so we
+ *      can't fetch project env vars; the indexer runs with `{}`.
+ *   2. `createDeploymentBackgroundWorker(deploymentId, body)` — writes the
+ *      flattened body to `index-metadata.json`. Downstream tooling (e.g.
+ *      a register-only Job in the cluster) re-issues this payload to the
+ *      real API.
+ *   3. `failDeployment(deploymentId, body)` — writes the error to
+ *      `index-error.json`.
+ *
+ * The multi-stage Containerfile copies these files into the final image so
+ * downstream tooling reads them out of the runtime image.
+ *
+ * Cast through `unknown` because `CliApiClient` is a concrete class with
+ * private fields and methods we don't need to stub. indexDeployment only
+ * touches the three methods above.
+ */
+function createOfflineCliApiClient(): CliApiClient {
+  return {
+    async getEnvironmentVariables() {
+      return { success: true as const, data: { variables: {} as Record<string, string> } };
+    },
+    async createDeploymentBackgroundWorker(
+      _deploymentId: string,
+      body: CreateBackgroundWorkerRequestBody
+    ) {
+      const indexMetadata = {
+        ...body.metadata,
+        buildPlatform: body.buildPlatform,
+        targetPlatform: body.targetPlatform,
+      };
+      await writeFile(
+        join(process.cwd(), "index-metadata.json"),
+        JSON.stringify(indexMetadata, null, 2)
+      );
+      return {
+        success: true as const,
+        data: {
+          id: "offline",
+          version: "offline",
+          contentHash: body.metadata.contentHash,
+        },
+      };
+    },
+    async failDeployment(_deploymentId: string, body: { error: unknown }) {
+      await writeFile(
+        join(process.cwd(), "index-error.json"),
+        JSON.stringify(body, null, 2)
+      );
+      return { success: true as const, data: { id: "offline" } };
+    },
+  } as unknown as CliApiClient;
 }
 
 const results = await bootstrap();

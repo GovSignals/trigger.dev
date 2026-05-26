@@ -45,7 +45,8 @@
     ],
     "exports": {
       "./package.json": "./package.json",
-      ".": "./src/index.ts"
+      ".": "./src/index.ts",
+      "./internal": "./src/internal.ts"
     }
   },
   "devDependencies": {
@@ -158,6 +159,12 @@
       "import": {
         "types": "./dist/esm/index.d.ts",
         "default": "./dist/esm/index.js"
+      }
+    },
+    "./internal": {
+      "import": {
+        "types": "./dist/esm/internal.d.ts",
+        "default": "./dist/esm/internal.js"
       }
     }
   }

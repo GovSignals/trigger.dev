@@ -708,7 +708,7 @@ export async function generateContainerfile(options: GenerateContainerfileOption
   }
 }
 
-const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
+export const parseGenerateOptions = (options: GenerateContainerfileOptions) => {
   const buildArgs = Object.entries(options.build.env || {})
     .flatMap(([key]) => `ARG ${key}`)
     .join("\n");

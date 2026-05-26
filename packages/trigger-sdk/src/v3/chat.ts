@@ -33,6 +33,7 @@ import {
 } from "@trigger.dev/core/v3";
 import { ChatTabCoordinator } from "./chat-tab-coordinator.js";
 import type { ChatInputChunk, ChatTaskWirePayload } from "./ai-shared.js";
+import { slimSubmitMessageForWire } from "./ai-shared.js";
 
 const DEFAULT_BASE_URL = "https://api.trigger.dev";
 const DEFAULT_STREAM_TIMEOUT_SECONDS = 120;
@@ -572,10 +573,15 @@ export class TriggerChatTransport implements ChatTransport<UIMessage> {
 
     // Slim wire — at most ONE message per record. The agent rebuilds prior
     // history from its durable S3 snapshot + session.out replay at run boot
-    // (or `hydrateMessages`, if registered). See plan vivid-humming-bonbon.
+    // (or `hydrateMessages`, if registered).
     //
     //   - "submit-message": ship the latest message (new user message OR a
     //     tool-approval-responded assistant message). Throw if absent.
+    //     Assistant messages with already-resolved tool parts are slimmed
+    //     to just their resolution payload — reasoning blobs, prior text,
+    //     and tool `input` stay on the agent side (rebuilt from snapshot
+    //     or `hydrateMessages`). Keeps continuation payloads under the
+    //     `.in/append` cap on reasoning-heavy turns.
     //   - "regenerate-message": omit `message`; the agent slices its own
     //     history (drops the trailing assistant) and re-runs.
     if (trigger === "submit-message" && messages.length === 0) {
@@ -585,7 +591,9 @@ export class TriggerChatTransport implements ChatTransport<UIMessage> {
     }
     const wirePayload: ChatTaskWirePayload = {
       ...((body as Record<string, unknown>) ?? {}),
-      ...(trigger === "submit-message" ? { message: messages.at(-1) } : {}),
+      ...(trigger === "submit-message"
+        ? { message: slimSubmitMessageForWire(messages.at(-1)) }
+        : {}),
       chatId,
       trigger,
       messageId,
@@ -671,17 +679,23 @@ export class TriggerChatTransport implements ChatTransport<UIMessage> {
     }
 
     // Hydrate session state from response headers so subsequent turns
-    // skip the endpoint and write directly to session.in.
+    // skip the endpoint and write directly to session.in. Failing fast
+    // when the header is missing avoids a quiet degraded state where
+    // every later turn re-runs the handover route instead of taking
+    // the slim-wire path.
     const accessToken = response.headers.get("X-Trigger-Chat-Access-Token");
     const chatId = args.chatId;
-    if (accessToken) {
-      const state: ChatSessionState = {
-        publicAccessToken: accessToken,
-        isStreaming: true,
-      };
-      this.sessions.set(chatId, state);
-      this.notifySessionChange(chatId, state);
+    if (!accessToken) {
+      throw new Error(
+        "chat.handover response is missing the X-Trigger-Chat-Access-Token header. chat.agent's handover endpoint must echo the session PAT so the transport can hydrate."
+      );
     }
+    const state: ChatSessionState = {
+      publicAccessToken: accessToken,
+      isStreaming: true,
+    };
+    this.sessions.set(chatId, state);
+    this.notifySessionChange(chatId, state);
 
     // Filter the parsed UIMessage stream:
     //   - Drop control chunks (`trigger:turn-complete`,
@@ -953,6 +967,14 @@ export class TriggerChatTransport implements ChatTransport<UIMessage> {
     this.coordinator?.removeMessagesListener(fn);
   }
   dispose(): void {
+    // Tear down any open session.out subscriptions before the coordinator
+    // goes away. Otherwise controllers in `activeStreams` keep reading
+    // until they time out, leaking network and memory on every
+    // unmount/navigation.
+    for (const controller of this.activeStreams.values()) {
+      controller.abort();
+    }
+    this.activeStreams.clear();
     this.coordinator?.dispose();
     this.coordinator = null;
   }

@@ -4,6 +4,7 @@ import {
   RealtimeRunSkipColumns,
 } from "@trigger.dev/core/v3";
 import { generateJWT as internal_generateJWT } from "@trigger.dev/core/v3";
+import "@trigger.dev/core/v3/sdk-scope-storage";
 
 /**
  * Register the global API client configuration. Alternatively, you can set the `TRIGGER_SECRET_KEY` and `TRIGGER_API_URL` environment variables.
@@ -74,8 +75,7 @@ type PublicTokenPermissionProperties = {
    *
    * `read:sessions:{id}` lets the bearer read both the `.out` and `.in`
    * channels and list runs on the session. `write:sessions:{id}` lets the
-   * bearer append to the session's channels. `trigger:sessions:{id}` permits
-   * triggering new runs on the session.
+   * bearer append to the session's channels and create new runs against it.
    */
   sessions?: string | string[];
 };

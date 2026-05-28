@@ -2,7 +2,38 @@
 import type { UnkeyCache } from "@internal/cache";
 import { StreamIngestor, StreamRecord, StreamResponder, StreamResponseOptions } from "./types";
 import { Logger, LogLevel } from "@trigger.dev/core/logger";
+import { headerValue } from "@trigger.dev/core/v3";
 import { randomUUID } from "node:crypto";
+import { ServiceValidationError } from "~/v3/services/common.server";
+
+// S2's per-record metered-size limit. Verified empirically against
+// cloud S2: append succeeds at metered=1048576 and 422s at 1048577
+// with `"record must have metered size less than 1 MiB"` (the "less
+// than" wording is slightly off — the boundary is inclusive).
+//
+// Metered size formula:
+//   metered = 8 (record overhead) + 2*H + Σ(header name + value) + body
+// where `body` is the unescaped record body length in UTF-8 bytes and
+// `H` is the number of S2 record headers.
+//
+// We attach no record headers (H=0), so the budget reduces to:
+//   8 + body ≤ 1048576  →  body ≤ 1048568
+export const S2_MAX_METERED_BYTES = 1024 * 1024; // 1 MiB
+export const S2_RECORD_BASE_OVERHEAD_BYTES = 8;
+
+/**
+ * Thrown when a record's metered size would exceed S2's hard per-record
+ * limit. Caught by the route handler and surfaced as 413.
+ */
+export class S2RecordTooLargeError extends ServiceValidationError {
+  constructor(public readonly meteredBytes: number) {
+    super(
+      `Record metered size ${meteredBytes} bytes exceeds the S2 per-record limit of ${S2_MAX_METERED_BYTES} bytes. Reduce tool-output size or split into smaller parts.`,
+      413
+    );
+    this.name = "S2RecordTooLargeError";
+  }
+}
 
 export type S2RealtimeStreamsOptions = {
   // S2
@@ -31,6 +62,16 @@ export type S2RealtimeStreamsOptions = {
     accessToken: string;
   }>;
 };
+
+// Ops the issued S2 access token is scoped to. `trim` is a distinct op
+// from `append` even though trim records are appended like any other —
+// without it, `AppendRecord.trim()` 403s with "Operation not permitted".
+// `chat.agent`'s per-turn trim chain depends on it.
+//
+// The fingerprint folds the ops list into the cache key, so any future
+// scope change auto-invalidates pre-deploy cached tokens.
+const S2_TOKEN_OPS = ["append", "create-stream", "trim"] as const;
+const S2_TOKEN_OPS_FINGERPRINT = [...S2_TOKEN_OPS].sort().join(",");
 
 type S2IssueAccessTokenResponse = { access_token: string };
 type S2AppendInput = { records: { body: string }[] };
@@ -170,8 +211,14 @@ export class S2RealtimeStreams implements StreamResponder, StreamIngestor {
   async #appendPartByName(part: string, partId: string, s2Stream: string): Promise<void> {
     this.logger.debug(`S2 appending to stream`, { part, stream: s2Stream });
 
+    const recordBody = JSON.stringify({ data: part, id: partId });
+    const meteredBytes = Buffer.byteLength(recordBody, "utf8") + S2_RECORD_BASE_OVERHEAD_BYTES;
+    if (meteredBytes > S2_MAX_METERED_BYTES) {
+      throw new S2RecordTooLargeError(meteredBytes);
+    }
+
     const result = await this.s2Append(s2Stream, {
-      records: [{ body: JSON.stringify({ data: part, id: partId }) }],
+      records: [{ body: recordBody }],
     });
 
     this.logger.debug(`S2 append result`, { result });
@@ -258,15 +305,37 @@ export class S2RealtimeStreams implements StreamResponder, StreamIngestor {
       if (eventType === "batch" && data) {
         try {
           const parsed = JSON.parse(data) as {
-            records: Array<{ body: string; seq_num: number; timestamp: number }>;
+            records: Array<{
+              body: string;
+              seq_num: number;
+              timestamp: number;
+              headers?: Array<[string, string]>;
+            }>;
           };
 
           for (const record of parsed.records) {
-            const parsedBody = JSON.parse(record.body) as { data: string; id: string };
+            // S2 command records (trim/fence) have a single header with
+            // empty name. Skip — callers want only data + Trigger control
+            // records.
+            if (record.headers?.[0]?.[0] === "") {
+              continue;
+            }
+
+            // Data records carry a JSON envelope; Trigger control records
+            // have an empty body and route via headers. Tolerate non-JSON
+            // bodies so a control record (or a malformed data record)
+            // doesn't take the whole batch down with it.
+            let parsedBody: { data: string; id: string } | undefined;
+            try {
+              parsedBody = JSON.parse(record.body) as { data: string; id: string };
+            } catch {
+              parsedBody = undefined;
+            }
             records.push({
-              data: parsedBody.data,
-              id: parsedBody.id,
+              data: parsedBody?.data ?? "",
+              id: parsedBody?.id ?? "",
               seqNum: record.seq_num,
+              headers: record.headers,
             });
           }
         } catch {
@@ -294,13 +363,19 @@ export class S2RealtimeStreams implements StreamResponder, StreamIngestor {
    * Serve SSE from a `Session`-primitive channel addressed by
    * `(friendlyId, io)`.
    *
-   * For `io=out`, peek the tail record first. If it's
-   * `trigger:turn-complete`, the agent has finished a turn and is
-   * either idle-waiting on `.in` or has exited — either way, no more
-   * chunks will arrive without further user action. We switch the
-   * downstream S2 read to `wait=0` (drain whatever's left, close fast)
-   * and set `X-Session-Settled: true` so the client knows this SSE
-   * close is terminal instead of the normal 60s long-poll cycle.
+   * For `io=out`, peek the tail of the stream. If the most recent
+   * non-command record is a `turn-complete` control record (i.e. the
+   * agent has finished a turn and is either idle-waiting on `.in` or
+   * has exited), no more chunks will arrive without further user
+   * action. We switch the downstream S2 read to `wait=0` (drain
+   * whatever's left, close fast) and set `X-Session-Settled: true` so
+   * the client knows this SSE close is terminal instead of the normal
+   * 60s long-poll cycle.
+   *
+   * The actual tail is now usually an S2 `trim` command record (the
+   * agent appends one after every turn-complete to keep `.out`
+   * bounded). The peek reads two records and walks past the trim to
+   * find the turn-complete underneath.
    *
    * Mid-turn tail (streaming UIMessageChunk) falls through to the
    * long-poll path; a crashed-mid-turn stream is indistinguishable
@@ -324,13 +399,8 @@ export class S2RealtimeStreams implements StreamResponder, StreamIngestor {
     // races the newly-triggered turn's first chunk and the SSE closes
     // before records land.
     if (io === "out" && options?.peekSettled) {
-      const lastChunk = await this.#peekLastChunkBody(s2Stream);
-      const lastChunkType =
-        lastChunk != null && typeof lastChunk === "object"
-          ? (lastChunk as { type?: unknown }).type
-          : null;
-      if (lastChunkType === "trigger:turn-complete") {
-        settled = true;
+      settled = await this.#peekIsSettled(s2Stream);
+      if (settled) {
         waitSeconds = 0;
       }
     }
@@ -351,13 +421,21 @@ export class S2RealtimeStreams implements StreamResponder, StreamIngestor {
     });
   }
 
-  async #peekLastChunkBody(s2Stream: string): Promise<unknown | null> {
+  /**
+   * Peek the tail of `.out` and return whether the stream is "settled" —
+   * i.e. the most recent non-command record is a `turn-complete` control
+   * record. The agent appends an S2 `trim` command record immediately
+   * after every turn-complete to keep the stream bounded, so we read two
+   * tail records and walk past any trim command to find the
+   * turn-complete underneath.
+   */
+  async #peekIsSettled(s2Stream: string): Promise<boolean> {
     const qs = new URLSearchParams();
-    // `tail_offset=1` reads one record before the next seq — i.e. the
-    // most recently appended record. `count=1` caps it to just that
-    // record. `wait=0` returns immediately with no long-poll.
-    qs.set("tail_offset", "1");
-    qs.set("count", "1");
+    // `tail_offset=2` rewinds two seq positions; `count=2` caps it to
+    // those two records. At steady state these are `[turn-complete, trim]`.
+    // `wait=0` returns immediately with no long-poll.
+    qs.set("tail_offset", "2");
+    qs.set("count", "2");
     qs.set("wait", "0");
 
     let res: Response;
@@ -376,13 +454,13 @@ export class S2RealtimeStreams implements StreamResponder, StreamIngestor {
       );
     } catch (err) {
       this.logger.warn("S2 peek last record: fetch failed", { err, stream: s2Stream });
-      return null;
+      return false;
     }
 
     if (!res.ok) {
       // 404: stream has never been written to. 416: range not
       // satisfiable (empty stream). Both mean "nothing to peek."
-      if (res.status === 404 || res.status === 416) return null;
+      if (res.status === 404 || res.status === 416) return false;
       const text = await res.text().catch(() => "");
       this.logger.warn("S2 peek last record failed", {
         status: res.status,
@@ -390,32 +468,43 @@ export class S2RealtimeStreams implements StreamResponder, StreamIngestor {
         text,
         stream: s2Stream,
       });
-      return null;
+      return false;
     }
 
+    let records: Array<{
+      body: string;
+      seq_num: number;
+      timestamp: number;
+      headers?: Array<[string, string]>;
+    }>;
     try {
       const json = (await res.json()) as {
-        records?: Array<{ body: string; seq_num: number; timestamp: number }>;
+        records?: Array<{
+          body: string;
+          seq_num: number;
+          timestamp: number;
+          headers?: Array<[string, string]>;
+        }>;
       };
-      const record = json.records?.[0];
-      if (!record) return null;
-      // The record body is a JSON string `{data: <chunkAsString>, id: partId}`.
-      // The agent-side writer (`StreamsWriterV2`) hands `appendPart` an
-      // already-JSON-stringified chunk, so `data` round-trips as a string,
-      // not an object. Parse it once more to surface the chunk shape.
-      const envelope = JSON.parse(record.body) as { data: unknown; id: string };
-      if (typeof envelope.data === "string") {
-        try {
-          return JSON.parse(envelope.data);
-        } catch {
-          return envelope.data;
-        }
-      }
-      return envelope.data;
+      records = json.records ?? [];
     } catch (err) {
       this.logger.warn("S2 peek last record: parse failed", { err, stream: s2Stream });
-      return null;
+      return false;
     }
+
+    // Walk from most-recent backward, skipping S2 command records
+    // (`headers[0][0] === ""`). The first non-command record is the
+    // real tail — settled iff its `trigger-control` header is
+    // `turn-complete`.
+    for (let i = records.length - 1; i >= 0; i--) {
+      const record = records[i]!;
+      if (record.headers?.[0]?.[0] === "") {
+        continue;
+      }
+      const controlValue = headerValue(record.headers, "trigger-control");
+      return controlValue === "turn-complete";
+    }
+    return false;
   }
 
   async #streamResponseByName(
@@ -521,8 +610,10 @@ export class S2RealtimeStreams implements StreamResponder, StreamIngestor {
     }
 
     // Cache key includes basin so per-org basins never collide on
-    // cached tokens. `${basin}:${prefix}` is unique per (org-basin, env).
-    const cacheKey = `${this.basin}:${this.streamPrefix}`;
+    // cached tokens, and the ops fingerprint so a scope change in code
+    // (e.g. adding `trim` in #3644) auto-invalidates pre-deploy entries
+    // instead of returning stale tokens for up to 24h.
+    const cacheKey = `${this.basin}:${this.streamPrefix}:${S2_TOKEN_OPS_FINGERPRINT}`;
     const result = await this.cache.accessToken.swr(cacheKey, async () => {
       return this.s2IssueAccessToken(id);
     });
@@ -548,7 +639,7 @@ export class S2RealtimeStreams implements StreamResponder, StreamIngestor {
           basins: {
             exact: this.basin,
           },
-          ops: ["append", "create-stream"],
+          ops: [...S2_TOKEN_OPS],
           streams: {
             prefix: this.streamPrefix,
           },

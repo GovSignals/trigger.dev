@@ -176,6 +176,15 @@ export type SSEStreamPart<TChunk = unknown> = {
   id: string;
   chunk: TChunk;
   timestamp: number;
+  /**
+   * S2 record headers, when the underlying transport is the v2 batch shape
+   * (Session streams). Undefined for v1 streams. Empty array when the record
+   * had no headers. Trigger control records carry a `trigger-control` named
+   * header (see `trigger-control` records on `session.out`) and may reach
+   * this struct. S2 command records (trim/fence) are identified by an
+   * empty-name first header and are filtered out before enqueue.
+   */
+  headers?: Array<[string, string]>;
 };
 
 // Real implementation for production
@@ -224,9 +233,15 @@ export class SSEStreamSubscription implements StreamSubscription {
       // reset the timer naturally.
       stallTimeoutMs?: number;
       // HTTP statuses that should NOT be retried — fail the stream
-      // permanently. `404` (stream gone) and `410` (session closed)
-      // are sensible defaults; tune per-caller for other 4xx.
+      // permanently. Defaults cover the permanent client-error set:
+      // `400` (bad request), `404` (stream gone), `409` (conflict),
+      // `410` (session closed), `422` (unprocessable). Tune per-caller
+      // for other 4xx.
       nonRetryableStatuses?: readonly number[];
+      // Optional fetch override. Used by transports that need to route
+      // the SSE connect through a custom path (proxy, custom headers,
+      // tracing). Defaults to global `fetch`.
+      fetchClient?: typeof fetch;
     }
   ) {
     this.lastEventId = options.lastEventId;
@@ -236,7 +251,9 @@ export class SSEStreamSubscription implements StreamSubscription {
     this.retryJitter = options.retryJitter ?? 0.5;
     this.fetchTimeoutMs = options.fetchTimeoutMs ?? 30_000;
     this.stallTimeoutMs = options.stallTimeoutMs ?? 0;
-    this.nonRetryableStatuses = new Set(options.nonRetryableStatuses ?? [404, 410]);
+    this.nonRetryableStatuses = new Set(
+      options.nonRetryableStatuses ?? [400, 404, 409, 410, 422]
+    );
   }
 
   /**
@@ -322,7 +339,8 @@ export class SSEStreamSubscription implements StreamSubscription {
         headers["Timeout-Seconds"] = this.options.timeoutInSeconds.toString();
       }
 
-      const response = await fetch(this.url, {
+      const fetchClient = this.options.fetchClient ?? fetch;
+      const response = await fetchClient(this.url, {
         headers,
         signal: this.internalAbort.signal,
       });
@@ -374,18 +392,47 @@ export class SSEStreamSubscription implements StreamSubscription {
               } else {
                 if (chunk.event === "batch") {
                   const data = safeParseJSON(chunk.data) as {
-                    records: Array<{ body: string; seq_num: number; timestamp: number }>;
+                    records: Array<{
+                      body: string;
+                      seq_num: number;
+                      timestamp: number;
+                      headers?: Array<[string, string]>;
+                    }>;
                   };
+                  if (!data || !Array.isArray(data.records)) return;
 
                   for (const record of data.records) {
+                    // Always advance the resume cursor — even for records we
+                    // skip — so a future Last-Event-ID reconnect lands past
+                    // them.
                     this.lastEventId = record.seq_num.toString();
-                    const parsedBody = safeParseJSON(record.body) as { data: unknown; id: string };
-                    if (seenIds.has(parsedBody.id)) continue;
-                    seenIds.add(parsedBody.id);
+
+                    // S2 command records (trim, fence) have a single header
+                    // with an empty name. They are S2-interpreted directives
+                    // that consume a seq_num but are not application data.
+                    // Skip enqueue; consumers shouldn't see them.
+                    if (record.headers?.[0]?.[0] === "") {
+                      continue;
+                    }
+
+                    // Data record (and Trigger control records — see
+                    // `trigger-control` header in `client-protocol.mdx`).
+                    // Control records have an empty body; data records have a
+                    // JSON envelope. `safeParseJSON("")` returns undefined,
+                    // which is what we want for control records — downstream
+                    // consumers route by `headers` and ignore `chunk`.
+                    const parsedBody = safeParseJSON(record.body) as
+                      | { data: unknown; id: string }
+                      | undefined;
+                    if (parsedBody?.id) {
+                      if (seenIds.has(parsedBody.id)) continue;
+                      seenIds.add(parsedBody.id);
+                    }
                     chunkController.enqueue({
                       id: record.seq_num.toString(),
-                      chunk: parsedBody.data,
+                      chunk: parsedBody?.data,
                       timestamp: record.timestamp,
+                      headers: record.headers ?? [],
                     });
                   }
                 }

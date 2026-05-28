@@ -2,7 +2,9 @@ import {
   accessoryAttributes,
   AnyTask,
   apiClientManager,
+  controlSubtype,
   getSchemaParseFn,
+  headerValue,
   InputStreamOncePromise,
   type InputStreamOnceOptions,
   type InputStreamWaitOptions,
@@ -31,6 +33,9 @@ import {
   type TaskSchema,
   type TaskRunContext,
   type TaskWithSchema,
+  SESSION_IN_EVENT_ID_HEADER,
+  TRIGGER_CONTROL_SUBTYPE,
+  generateJWT,
   type WriterStreamOptions,
 } from "@trigger.dev/core/v3";
 import type {
@@ -42,7 +47,7 @@ import type {
   UIMessageStreamOptions,
   LanguageModelUsage,
 } from "ai";
-import type { StreamWriteResult } from "@trigger.dev/core/v3";
+import type { ChatSnapshotV1, StreamWriteResult } from "@trigger.dev/core/v3";
 import {
   convertToModelMessages,
   dynamicTool,
@@ -73,7 +78,7 @@ import type { ResolvedSkill } from "./skill.js";
 // never touches `ai.ts`'s module graph, so the `node:*` builtins
 // pulled in transitively here never reach a client chunk.
 import { runBashInSkill, readFileInSkill } from "./agentSkillsRuntime.js";
-import { streams } from "./streams.js";
+import { streams, markChatAgentRunForStreamsWarning } from "./streams.js";
 import {
   sessions,
   type SessionHandle,
@@ -132,87 +137,87 @@ const chatTurnContextKey = locals.create<ChatTurnContext>("chat.turnContext");
 const chatSessionHandleKey = locals.create<SessionHandle>("chat.sessionHandle");
 
 /**
- * Scan `session.out` for the latest `trigger:turn-complete` chunk and
- * return its SSE timestamp. Used at OOM-retry boot to derive a
- * lower-bound timestamp for the `session.in` filter — records older
- * than `T_last_complete` belong to turns that already completed on the
- * prior attempt and are dropped before they reach the turn loop.
+ * S2 seq_num of the most recent `turn-complete` control record written by
+ * this worker. Read by `writeTurnCompleteChunk` to know what to trim back
+ * to when the next turn finishes, keeping `session.out` bounded to ~one
+ * turn at steady state.
  *
- * Implementation is a streaming scan: subscribes via the existing SSE
- * endpoint with a short `timeoutInSeconds`, processes each part inline,
- * and discards the chunk body so memory stays O(1) regardless of how
- * many records are on `session.out`. Bandwidth scales linearly with
- * stream length but the scan only fires on retry — a rare event.
- *
- * Returns `undefined` if no `trigger:turn-complete` chunk has been
- * written yet (first-turn OOM, no completed turns to dedup against).
+ * Seeded at boot from `ChatSnapshotV1.lastOutEventId` (which is exactly
+ * the previous turn-complete's seq_num). Wrapped in a mutable holder so
+ * `writeTurnCompleteChunk` can advance it without going through a setter.
  * @internal
  */
-async function findLatestTurnCompleteTimestamp(
+const lastTurnCompleteSeqNumKey = locals.create<{ value: number | undefined }>(
+  "chat.lastTurnCompleteSeqNum"
+);
+
+/**
+ * Scan `session.out` for the latest `turn-complete` control record and
+ * return its `session-in-event-id` header value — the committed-consume
+ * cursor on `.in` as of that turn-complete. Used at worker boot to seed
+ * the `.in` subscription so already-processed user messages don't get
+ * replayed from S2.
+ *
+ * Implementation streams the SSE endpoint and listens for `turn-complete`
+ * via the transport's `onControl` callback; the data-chunk for-await is
+ * just there to drive the stream. The scan is O(1 turn) because
+ * `session.out` is bounded to roughly one turn at steady state — every
+ * successful turn-complete is followed by an S2 trim back to the
+ * previous one (see `writeTurnCompleteChunk`).
+ *
+ * Returns `undefined` if no `turn-complete` carrying the header has been
+ * written yet — first-turn-ever, first turn post-OOM-with-no-prior-runs,
+ * or a `turn-complete` written before this header existed (cross-version
+ * boot). Callers fall back to subscribing `.in` from seq 0 in that case;
+ * the slim-wire merge handles any dedup against snapshot-restored
+ * messages.
+ * @internal
+ */
+async function findLatestSessionInCursor(
   chatId: string
 ): Promise<number | undefined> {
   const apiClient = apiClientManager.clientOrThrow();
-  let latestTs: number | undefined;
+  let latestCursor: number | undefined;
   const stream = await apiClient.subscribeToSessionStream<unknown>(chatId, "out", {
-    timeoutInSeconds: 1,
-    onPart: (part) => {
-      let chunk: unknown = part.chunk;
-      if (typeof chunk === "string") {
-        try {
-          chunk = JSON.parse(chunk);
-        } catch {
-          return;
-        }
-      }
-      if (chunk && typeof chunk === "object" && (chunk as { type?: unknown }).type === "trigger:turn-complete") {
-        latestTs = part.timestamp;
-      }
+    // 5s rather than 1s: S2 trim is eventually-consistent (10-60s
+    // window), so a worker booting just after a trim could still see
+    // pre-trim records and need a bit longer to drain them all before
+    // the SSE long-poll closes. Without enough headroom the scan would
+    // fall back to `undefined`, the `.in` cursor wouldn't be seeded,
+    // and the next subscribe would replay messages already processed.
+    timeoutInSeconds: 5,
+    onControl: (event) => {
+      if (event.subtype !== TRIGGER_CONTROL_SUBTYPE.TURN_COMPLETE) return;
+      const raw = headerValue(event.headers, SESSION_IN_EVENT_ID_HEADER);
+      if (!raw) return;
+      const parsed = Number.parseInt(raw, 10);
+      if (Number.isFinite(parsed)) latestCursor = parsed;
     },
   });
-  // Drain the stream to drive `onPart`. We don't accumulate the chunks —
-  // each iteration discards the data immediately, so a long session.out
-  // doesn't blow memory on the retry-boot worker.
+  // Drain the stream so the underlying SSE reader runs to completion. We
+  // don't accumulate chunks; `onControl` fires inline as turn-complete
+  // records arrive.
   for await (const _ of stream) {
     // intentionally empty
   }
-  return latestTs;
+  return latestCursor;
 }
 
 /**
  * Versioned blob written to S3 after every turn completes (when no
  * `hydrateMessages` hook is registered). Read at run boot to seed the
  * accumulator with prior conversation state, replacing the old wire-borne
- * full-history seed. Only the runtime owns this format — customers never
- * touch it.
+ * full-history seed.
  *
- * `lastOutEventId` is the SSE Last-Event-ID after the snapshot's final
- * chunk, used to resume `session.out` replay from precisely after the
- * snapshot. `lastOutTimestamp` is the same chunk's timestamp, used to
- * skip `findLatestTurnCompleteTimestamp` on OOM retry boot.
+ * The shape is shared with the Sessions dashboard (which reads the same
+ * blob to render the full conversation transcript) via
+ * `@trigger.dev/core/v3`. Customer code shouldn't reach in here — the
+ * SDK transports surface the messages through the standard `messages`
+ * accumulator.
  *
  * @internal
  */
-export type ChatSnapshotV1<TUIMessage extends UIMessage = UIMessage> = {
-  version: 1;
-  savedAt: number;
-  messages: TUIMessage[];
-  lastOutEventId?: string;
-  lastOutTimestamp?: number;
-};
-
-/**
- * S3 key suffix for a session's snapshot blob. The webapp's presigned-URL
- * routes prefix this with `packets/{projectRef}/{envSlug}/` server-side, so
- * the final S3 key lands at
- * `packets/{projectRef}/{envSlug}/sessions/{sessionId}/snapshot.json`.
- *
- * Stable per session: the friendlyId persists across `chat.requestUpgrade`
- * continuations and idle-suspend restarts.
- * @internal
- */
-function snapshotFilename(sessionId: string): string {
-  return `sessions/${sessionId}/snapshot.json`;
-}
+export type { ChatSnapshotV1 } from "@trigger.dev/core/v3";
 
 /**
  * Test-only override hook — `mockChatAgent` installs a fake to return
@@ -266,7 +271,7 @@ async function readChatSnapshot<TUIMessage extends UIMessage>(
   const apiClient = apiClientManager.clientOrThrow();
   let presignedUrl: string;
   try {
-    const resp = await apiClient.getPayloadUrl(snapshotFilename(sessionId));
+    const resp = await apiClient.getChatSnapshotUrl(sessionId);
     presignedUrl = resp.presignedUrl;
   } catch (error) {
     logger.warn("chat.agent: snapshot presign (read) failed; continuing without snapshot", {
@@ -341,7 +346,7 @@ async function writeChatSnapshot<TUIMessage extends UIMessage>(
   const apiClient = apiClientManager.clientOrThrow();
   let presignedUrl: string;
   try {
-    const resp = await apiClient.createUploadPayloadUrl(snapshotFilename(sessionId));
+    const resp = await apiClient.createChatSnapshotUploadUrl(sessionId);
     presignedUrl = resp.presignedUrl;
   } catch (error) {
     logger.warn("chat.agent: snapshot presign (write) failed; next run will replay further", {
@@ -481,10 +486,29 @@ export function __mergeByIdReplaceWinsForTests<TUIMessage extends UIMessage>(
  * part of the public API.
  * @internal
  */
+type ReplaySessionOutTailResult<TUIMessage extends UIMessage> = {
+  /** Messages whose `finish` chunk landed before the run died. Safe to seed the chain. */
+  settled: TUIMessage[];
+  /**
+   * The trailing assistant message whose `finish` chunk never arrived —
+   * an orphan from a cancel / crash / OOM. `cleanupAbortedParts` has
+   * already stripped streaming-in-progress fragments. `undefined` if
+   * the tail ended cleanly (every segment closed).
+   */
+  partial: TUIMessage | undefined;
+  /**
+   * The trailing assistant message BEFORE `cleanupAbortedParts` ran. Same
+   * `undefined` semantics as `partial`. Use this when you need to inspect
+   * tool parts the cleanup would strip (e.g. `input-available` /
+   * `input-streaming` orphans surfaced via `pendingToolCalls`).
+   */
+  partialRaw: TUIMessage | undefined;
+};
+
 type ReplaySessionOutTailImpl = <TUIMessage extends UIMessage>(
   sessionId: string,
   options?: { lastEventId?: string }
-) => Promise<TUIMessage[]>;
+) => Promise<ReplaySessionOutTailResult<TUIMessage>>;
 let replaySessionOutTailImpl: ReplaySessionOutTailImpl | undefined;
 
 export function __setReplaySessionOutTailImplForTests(
@@ -525,7 +549,7 @@ export function __setReplaySessionOutTailImplForTests(
 async function replaySessionOutTail<TUIMessage extends UIMessage>(
   sessionId: string,
   options?: { lastEventId?: string }
-): Promise<TUIMessage[]> {
+): Promise<ReplaySessionOutTailResult<TUIMessage>> {
   if (replaySessionOutTailImpl) {
     return await replaySessionOutTailImpl<TUIMessage>(sessionId, options);
   }
@@ -535,16 +559,12 @@ async function replaySessionOutTail<TUIMessage extends UIMessage>(
   });
   const collected: UIMessageChunk[] = [];
   for (const record of response.records) {
-    // Each record's `data` is the JSON-encoded chunk body the agent
-    // wrote at append time. The records endpoint returns it as an
-    // opaque string so the parsing cost is paid here, not on the
-    // server's hot path.
-    let chunk: unknown;
-    try {
-      chunk = JSON.parse(record.data);
-    } catch {
-      continue;
-    }
+    // `data` is the chunk object as written by the SDK's session-out
+    // writer (an AI SDK `UIMessageChunk` or a Trigger control object).
+    // The route forwards it as-is — no JSON envelope to unwrap here.
+    // Defensive shape checks below tolerate malformed records by
+    // skipping them instead of throwing.
+    const chunk: unknown = record.data;
     if (!chunk || typeof chunk !== "object") continue;
     const type = (chunk as { type?: unknown }).type;
     if (typeof type !== "string") continue;
@@ -554,7 +574,7 @@ async function replaySessionOutTail<TUIMessage extends UIMessage>(
     if (type.startsWith("trigger:")) continue;
     collected.push(chunk as UIMessageChunk);
   }
-  if (collected.length === 0) return [];
+  if (collected.length === 0) return { settled: [], partial: undefined, partialRaw: undefined };
 
   // Split chunks into per-message segments. A `start` chunk demarcates the
   // beginning of an assistant message; chunks before any `start` (rare —
@@ -583,7 +603,9 @@ async function replaySessionOutTail<TUIMessage extends UIMessage>(
     }
   }
 
-  const messages: TUIMessage[] = [];
+  const settled: TUIMessage[] = [];
+  let partial: TUIMessage | undefined;
+  let partialRaw: TUIMessage | undefined;
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]!;
     const isTrailing = i === segments.length - 1 && !seg.closed;
@@ -612,12 +634,17 @@ async function replaySessionOutTail<TUIMessage extends UIMessage>(
     if (isTrailing) {
       const cleaned = cleanupAbortedParts(last as TUIMessage);
       if (cleaned.parts.length === 0) continue;
-      messages.push(cleaned);
+      partial = cleaned;
+      // Keep the raw pre-cleanup message too — recovery boot extracts
+      // `pendingToolCalls` from it, since `cleanupAbortedParts` strips
+      // exactly the input-streaming / input-available tool parts that
+      // we want to surface.
+      partialRaw = last as TUIMessage;
     } else {
-      messages.push(last as TUIMessage);
+      settled.push(last as TUIMessage);
     }
   }
-  return messages;
+  return { settled, partial, partialRaw };
 }
 
 /**
@@ -644,9 +671,122 @@ export async function __replaySessionOutTailProductionPathForTests<
   const saved = replaySessionOutTailImpl;
   replaySessionOutTailImpl = undefined;
   try {
-    return await replaySessionOutTail<TUIMessage>(sessionId, options);
+    const { settled, partial } = await replaySessionOutTail<TUIMessage>(sessionId, options);
+    return partial !== undefined ? [...settled, partial] : settled;
   } finally {
     replaySessionOutTailImpl = saved;
+  }
+}
+
+/**
+ * Test-only override hook for `replaySessionInTail`. Mirrors
+ * `__setReplaySessionOutTailImplForTests` so unit tests can drive the boot
+ * loop's chain-reconstruction logic without an HTTP round-trip.
+ * @internal
+ */
+type ReplaySessionInTailImpl = <TUIMessage extends UIMessage>(
+  sessionId: string,
+  options?: { lastEventId?: string }
+) => Promise<{ message: TUIMessage; metadata: unknown; seqNum: number }[]>;
+let replaySessionInTailImpl: ReplaySessionInTailImpl | undefined;
+
+export function __setReplaySessionInTailImplForTests(
+  impl: ReplaySessionInTailImpl | undefined
+): void {
+  replaySessionInTailImpl = impl;
+}
+
+/**
+ * Drain `session.in` from `lastEventId` (or the start) and surface the user
+ * messages that landed past the cursor. Mirror of `replaySessionOutTail` —
+ * both reads run at continuation boot so the SDK can reconstruct
+ * conversational order across a dead run that never wrote `onTurnComplete`.
+ *
+ * `session.in` carries the {@link ChatInputChunk} tagged union:
+ *   - `kind: "message"` — a `ChatTaskWirePayload` envelope for a new user
+ *     message (`trigger: "submit-message"`) or a regeneration. Only the
+ *     submit-message records carry a `payload.message`; regenerations,
+ *     preload / close / action / handover-prepare have no message.
+ *   - `kind: "stop"` — mid-turn cancellation signal. Not a message.
+ *   - `kind: "handover"` / `kind: "handover-skip"` — head-start signals.
+ *     Not user messages.
+ *
+ * This function filters to the first variant and returns the embedded
+ * `UIMessage`s in seq_num order, paired with their seq_num so the caller
+ * can advance the session.in cursor past them.
+ *
+ * Errors are propagated to the caller (the boot loop wraps in try/catch
+ * and `logger.warn`s); we don't swallow here so test code can observe
+ * failures directly.
+ * @internal
+ */
+async function replaySessionInTail<TUIMessage extends UIMessage>(
+  sessionId: string,
+  options?: { lastEventId?: string }
+): Promise<{ message: TUIMessage; metadata: unknown; seqNum: number }[]> {
+  if (replaySessionInTailImpl) {
+    return await replaySessionInTailImpl<TUIMessage>(sessionId, options);
+  }
+  const apiClient = apiClientManager.clientOrThrow();
+  const response = await apiClient.readSessionStreamRecords(sessionId, "in", {
+    afterEventId: options?.lastEventId,
+  });
+  const out: { message: TUIMessage; metadata: unknown; seqNum: number }[] = [];
+  for (const record of response.records) {
+    // session.in writers POST `JSON.stringify(chunk)` directly; the
+    // webapp wraps that in `{ data: <string>, id }` and stores it on
+    // S2. The records endpoint hands `data` back as the original
+    // string — unlike session.out (where the writer puts a chunk
+    // OBJECT into the envelope and the route forwards it as an
+    // object). Defensive: handle both shapes so future writer changes
+    // on either side don't silently lose records.
+    let chunk: unknown = record.data;
+    if (typeof chunk === "string") {
+      try {
+        chunk = JSON.parse(chunk);
+      } catch {
+        continue;
+      }
+    }
+    if (!chunk || typeof chunk !== "object") continue;
+    const kind = (chunk as { kind?: unknown }).kind;
+    if (kind !== "message") continue;
+    const payload = (
+      chunk as {
+        payload?: { trigger?: unknown; message?: unknown; metadata?: unknown };
+      }
+    ).payload;
+    if (!payload || payload.trigger !== "submit-message") continue;
+    const message = payload.message;
+    if (!message || typeof message !== "object") continue;
+    out.push({
+      message: message as TUIMessage,
+      metadata: payload.metadata,
+      seqNum: record.seqNum,
+    });
+  }
+  return out;
+}
+
+/**
+ * Test-only entry point that bypasses
+ * `__setReplaySessionInTailImplForTests` and reaches the real
+ * `apiClient.readSessionStreamRecords` + filter pipeline. Mirrors
+ * `__replaySessionOutTailProductionPathForTests`.
+ * @internal
+ */
+export async function __replaySessionInTailProductionPathForTests<
+  TUIMessage extends UIMessage,
+>(
+  sessionId: string,
+  options?: { lastEventId?: string }
+): Promise<{ message: TUIMessage; metadata: unknown; seqNum: number }[]> {
+  const saved = replaySessionInTailImpl;
+  replaySessionInTailImpl = undefined;
+  try {
+    return await replaySessionInTail<TUIMessage>(sessionId, options);
+  } finally {
+    replaySessionInTailImpl = saved;
   }
 }
 
@@ -1882,6 +2022,40 @@ function* iterateToolParts(
 }
 
 /**
+ * Walk a partial assistant message and surface the tool calls the model
+ * had started but never received a result for. Used at recovery boot to
+ * populate `RecoveryBootEvent.pendingToolCalls`.
+ *
+ * The partial assistant in question is the orphan from a dead run — its
+ * `turn-complete` never fired, so any `input-available` tool part is
+ * truly orphan (NOT a stable HITL pause; HITL parts live on settled
+ * messages, not on the partial).
+ *
+ * @internal
+ */
+function extractPendingToolCallsFromPartial(
+  partial: UIMessage | undefined
+): RecoveryPendingToolCall[] {
+  if (!partial) return [];
+  const out: RecoveryPendingToolCall[] = [];
+  const parts = (partial.parts ?? []) as any[];
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (!isToolUIPart(part)) continue;
+    if (!isPendingToolState(part.state)) continue;
+    const toolCallId = part.toolCallId;
+    if (typeof toolCallId !== "string" || toolCallId.length === 0) continue;
+    out.push({
+      toolCallId,
+      toolName: getToolName(part),
+      input: part.input,
+      partIndex: i,
+    });
+  }
+  return out;
+}
+
+/**
  * Tool parts on the *leaf* assistant message that are still waiting on
  * an answer (`input-available` state). Used to gate fresh user turns
  * during HITL flows.
@@ -1952,6 +2126,110 @@ function extractNewToolResultsFromHistory(
     }
   }
   return out;
+}
+
+/**
+ * Per-turn merge of an incoming wire `UIMessage` onto the matching entry
+ * a `hydrateMessages` hook (or the default accumulator) provides. Used
+ * to fold tool-state advances from the client into the agent's
+ * authoritative chain without trusting the wire copy for fields the
+ * LLM consumes.
+ *
+ * `hydrated` is treated as the source of truth for everything outside
+ * tool-state advancement: text, reasoning blobs, provider metadata,
+ * and tool `input` all stay as hydrated had them. We only overlay
+ * tool parts whose incoming state is wire-advanced — `output-available`
+ * / `output-error` (HITL `addToolOutput`) or `approval-responded` /
+ * `output-denied` (approval flow) — and only the corresponding
+ * resolution fields (`output` / `errorText` / `approval`). Hydrated
+ * `input` and everything else stay put.
+ *
+ * Without this, a slim wire copy (which `TriggerChatTransport` /
+ * `AgentChat.sendRaw` ship by default on HITL continuations) would
+ * clobber the hydrated assistant — the next LLM call would receive a
+ * tool call with no `input` and 4xx.
+ *
+ * @internal
+ */
+function mergeIncomingIntoHydrated<TMsg extends UIMessage>(
+  hydrated: TMsg,
+  incoming: UIMessage
+): TMsg {
+  const incomingAdvancedByCallId = new Map<string, any>();
+  for (const part of (incoming.parts ?? []) as any[]) {
+    if (!isToolUIPart(part)) continue;
+    const toolCallId = part.toolCallId;
+    if (typeof toolCallId !== "string" || toolCallId.length === 0) continue;
+    if (!isWireAdvanceableToolState(part.state)) continue;
+    incomingAdvancedByCallId.set(toolCallId, part);
+  }
+
+  if (incomingAdvancedByCallId.size === 0) return hydrated;
+
+  let mutated = false;
+  const hydratedParts = (hydrated.parts ?? []) as any[];
+  const mergedParts = hydratedParts.map((part) => {
+    if (!isToolUIPart(part)) return part;
+    const toolCallId = part.toolCallId;
+    if (typeof toolCallId !== "string" || toolCallId.length === 0) return part;
+    const incomingPart = incomingAdvancedByCallId.get(toolCallId);
+    if (!incomingPart) return part;
+    // Terminal hydrated states (`output-available`, `output-error`,
+    // `output-denied`) are authoritative — never regressed by a stale
+    // wire arrival (replay, retry, out-of-order). `output-denied`
+    // matters here because the wire's `approval-responded` could
+    // otherwise overwrite a hydrated denial back to a non-terminal
+    // state.
+    if (isResolvedToolState(part.state) || part.state === "output-denied") {
+      return part;
+    }
+    // Same state on both sides — no progression to apply.
+    if (part.state === incomingPart.state) return part;
+    mutated = true;
+    if (incomingPart.state === "output-available") {
+      return {
+        ...part,
+        state: incomingPart.state,
+        output: incomingPart.output,
+        ...(incomingPart.approval !== undefined ? { approval: incomingPart.approval } : {}),
+      };
+    }
+    if (incomingPart.state === "output-error") {
+      return {
+        ...part,
+        state: incomingPart.state,
+        errorText: incomingPart.errorText,
+        ...(incomingPart.approval !== undefined ? { approval: incomingPart.approval } : {}),
+      };
+    }
+    // approval-responded / output-denied — overlay state + approval.
+    return {
+      ...part,
+      state: incomingPart.state,
+      ...(incomingPart.approval !== undefined ? { approval: incomingPart.approval } : {}),
+    };
+  });
+
+  if (!mutated) return hydrated;
+  return { ...hydrated, parts: mergedParts };
+}
+
+/**
+ * Mirror of `slimSubmitMessageForWire`'s predicate. Kept here so the
+ * agent runtime doesn't have to import from `ai-shared.ts` for a
+ * one-liner. See that file for the full state-machine docs.
+ *
+ * @internal
+ */
+function isWireAdvanceableToolState(
+  state: unknown
+): state is "output-available" | "output-error" | "approval-responded" | "output-denied" {
+  return (
+    state === "output-available" ||
+    state === "output-error" ||
+    state === "approval-responded" ||
+    state === "output-denied"
+  );
 }
 
 /**
@@ -2293,7 +2571,7 @@ export type PendingMessagesOptions<TUIM extends UIMessage = UIMessage> = {
 // React hooks (`@trigger.dev/sdk/chat/react`) can import it without
 // dragging `ai.ts` into the browser graph. Re-exported here so
 // `@trigger.dev/sdk/ai` consumers still see it.
-export { PENDING_MESSAGE_INJECTED_TYPE } from "./ai-shared.js";
+export { PENDING_MESSAGE_INJECTED_TYPE, upsertIncomingMessage } from "./ai-shared.js";
 import { PENDING_MESSAGE_INJECTED_TYPE } from "./ai-shared.js";
 
 /** @internal */
@@ -3513,6 +3791,126 @@ export type BootEvent<TClientData = unknown> = {
 };
 
 /**
+ * A tool call extracted from the partial assistant message of a dead run.
+ * Surfaced on `RecoveryBootEvent.pendingToolCalls` so the customer can
+ * decide how to repair the chain (synthesize a result, drop the partial,
+ * etc.).
+ */
+export type RecoveryPendingToolCall = {
+  /** The AI SDK tool call id. */
+  toolCallId: string;
+  /** The tool name (the `tool-${name}` suffix). */
+  toolName: string;
+  /** The input the model produced for the tool call. */
+  input: unknown;
+  /** The part index inside `partialAssistant.parts` for in-place edits. */
+  partIndex: number;
+};
+
+/**
+ * Event passed to the `onRecoveryBoot` callback.
+ *
+ * Fires once at boot when a continuation run inherits in-flight state from
+ * a dead predecessor (cancel / crash / OOM / deploy eviction / graceful
+ * `chat.requestUpgrade`). The runtime reads both `session.in` and
+ * `session.out` past the last `turn-complete` cursor and surfaces the
+ * recovered pieces here so the customer can shape the conversational
+ * chain before the first turn fires.
+ *
+ * Does NOT fire when there's nothing to recover (clean continuation after
+ * `chat.endRun()` with no buffered user messages, fresh chat, OOM retry
+ * after a successful turn-complete with no in-flight tail).
+ *
+ * Does NOT fire when `hydrateMessages` is registered (the customer owns
+ * persistence; recovery decisions live in their own DB query).
+ */
+export type RecoveryBootEvent<TUIM extends UIMessage = UIMessage> = {
+  /** Task run context — same as `task({ run })` second-argument `ctx`. */
+  ctx: TaskRunContext;
+  /** The unique identifier for the chat session. */
+  chatId: string;
+  /** The Trigger.dev run ID for this run boot. */
+  runId: string;
+  /** Public id of the prior run that died. */
+  previousRunId: string;
+  /**
+   * Best-effort cause of the predecessor's death. Currently always
+   * `"unknown"` — the run engine doesn't yet plumb the real reason
+   * into the continuation payload. Future SDK versions will narrow
+   * this. Don't branch behavior on it yet.
+   */
+  cause: "cancelled" | "crashed" | "unknown";
+  /**
+   * The conversation chain that was successfully persisted by the
+   * predecessor's last `onTurnComplete`. Empty if the predecessor died
+   * before turn 1 ever completed.
+   */
+  settledMessages: TUIM[];
+  /**
+   * User messages that arrived on `session.in` past the cursor — i.e.
+   * the message(s) the predecessor was processing or had queued when
+   * it died. The runtime's default is to re-dispatch each as a fresh
+   * turn after the chain is restored. Return a different list via
+   * `recoveredTurns` to skip / reorder / collapse them.
+   */
+  inFlightUsers: TUIM[];
+  /**
+   * The trailing assistant message the predecessor was streaming when
+   * it died — the orphan whose `turn-complete` never fired. Undefined
+   * if the predecessor died before any assistant output reached
+   * `session.out` (cancel-before-first-token, snapshot-only path).
+   */
+  partialAssistant: TUIM | undefined;
+  /**
+   * Tool calls extracted from `partialAssistant.parts` that the model
+   * had started but the tool runtime never resolved. Empty when
+   * `partialAssistant` is undefined or carries no `input-available`
+   * tool parts.
+   */
+  pendingToolCalls: RecoveryPendingToolCall[];
+  /**
+   * Lazy session.out writer — identical to the `writer` passed to
+   * `onTurnStart` / `onTurnComplete` / `onChatStart`. Use this to emit
+   * a recovery signal (e.g. a `data-chat-recovery` UIMessage chunk)
+   * BEFORE the first recovered turn fires so the bridge can render a
+   * "recovering..." banner. Lazy: no overhead if unused.
+   */
+  writer: ChatWriter;
+};
+
+/**
+ * Return shape for the `onRecoveryBoot` callback. Every field is optional —
+ * omit one to accept the default.
+ */
+export type RecoveryBootResult<TUIM extends UIMessage = UIMessage> = {
+  /**
+   * The chain the new run boots with. Replaces the default
+   * (`settledMessages`). Use this to keep the partial assistant in
+   * context, mutate its tool parts to inject synthesized results,
+   * collapse history, etc.
+   *
+   * Ignored when `hydrateMessages` is registered (the hydrate hook
+   * runs per-turn and overwrites the chain).
+   */
+  chain?: TUIM[];
+  /**
+   * The user messages to re-dispatch as fresh turns after the chain is
+   * restored. Default: `inFlightUsers` (re-process every in-flight
+   * user). Return `[]` to suppress all of them; return a filtered /
+   * reordered subset to skip specific ones.
+   */
+  recoveredTurns?: TUIM[];
+  /**
+   * Awaitable run AFTER the writer flushes and BEFORE the first
+   * recovered turn fires. Use for blocking persistence (e.g. write the
+   * partial assistant to your DB so a follow-up turn can reference
+   * it). Errors bubble — wrap your own try/catch if you want to soft-
+   * fail.
+   */
+  beforeBoot?: () => Promise<void>;
+};
+
+/**
  * Event passed to the `onChatStart` callback.
  *
  * Fires exactly once per chat, on the very first user message of the chat's
@@ -3582,7 +3980,14 @@ export type HydrateMessagesEvent<TClientData = unknown, TUIM extends UIMessage =
  * Event passed to the `onValidateMessages` callback.
  */
 export type ValidateMessagesEvent<TUIM extends UIMessage = UIMessage> = {
-  /** The incoming UI messages for this turn (after cleanup of aborted tool parts). */
+  /**
+   * The incoming UI messages for this turn (after cleanup of aborted tool parts).
+   *
+   * For HITL continuations the assistant entry is slim — `state` + `output` /
+   * `errorText` / `approval` only, no `input` or other parts. Don't pass the
+   * full `messages` array to `validateUIMessages` from `ai`; filter to user
+   * messages (or your own subset) first.
+   */
   messages: TUIM[];
   /** The unique identifier for the chat session. */
   chatId: string;
@@ -3998,6 +4403,43 @@ export type ChatAgentOptions<
   onBoot?: (event: BootEvent<inferSchemaOut<TClientDataSchema>>) => Promise<void> | void;
 
   /**
+   * Recovery boot hook — fires once on a continuation run that inherited
+   * in-flight state from a dead predecessor (cancel / crash / OOM /
+   * deploy eviction / `chat.requestUpgrade()`). The runtime reads both
+   * stream tails past the last `turn-complete` cursor and hands the
+   * customer the recovered pieces (settled chain, in-flight users,
+   * partial assistant, pending tool calls) so the chain can be shaped
+   * before the first recovered turn fires.
+   *
+   * Does NOT fire when there's nothing to recover — e.g. a clean
+   * continuation after `chat.endRun()` with no buffered user, a fresh
+   * chat, or an OOM retry on top of a complete snapshot.
+   *
+   * Does NOT fire when `hydrateMessages` is registered — that hook owns
+   * the per-turn chain and overlapping recovery decisions belong in the
+   * customer's DB.
+   *
+   * Defaults (returned when the hook is omitted or returns no field):
+   *   - `chain` = `settledMessages` (drop the orphan partial)
+   *   - `recoveredTurns` = `inFlightUsers` (re-dispatch every user)
+   *
+   * @example
+   * ```ts
+   * onRecoveryBoot: async ({ partialAssistant, inFlightUsers, writer, cause }) => {
+   *   writer.write({
+   *     type: "data-chat-recovery",
+   *     id: generateId(),
+   *     data: { cause, partial: partialAssistant?.id },
+   *   });
+   *   return {}; // accept defaults: drop partial, re-dispatch users
+   * }
+   * ```
+   */
+  onRecoveryBoot?: (
+    event: RecoveryBootEvent<TUIMessage>
+  ) => Promise<RecoveryBootResult<TUIMessage> | void> | RecoveryBootResult<TUIMessage> | void;
+
+  /**
    * Called when a preloaded run starts, before the first message arrives.
    *
    * Use this to initialize state, create DB records, and load context early —
@@ -4041,8 +4483,13 @@ export type ChatAgentOptions<
    *
    * Return the validated messages array. Throw to abort the turn with an error.
    *
-   * This is the right place to call the AI SDK's `validateUIMessages` to catch
-   * malformed messages from storage or untrusted input before they reach the model.
+   * This is the right place to call the AI SDK's `validateUIMessages` on fresh
+   * user input. For HITL continuations (`addToolOutput` /
+   * `addToolApproveResponse`), the wire carries a slim assistant message — only
+   * the resolved tool parts, with `state` + `output` / `errorText` / `approval`
+   * and no `input`. `validateUIMessages` against the AI SDK schema rejects
+   * that shape, so filter to user messages (or skip validation entirely) on
+   * those turns.
    *
    * @example
    * ```ts
@@ -4051,7 +4498,11 @@ export type ChatAgentOptions<
    * chat.agent({
    *   id: "my-chat",
    *   onValidateMessages: async ({ messages }) => {
-   *     return validateUIMessages({ messages, tools: chatTools });
+   *     const userMessages = messages.filter((m) => m.role === "user");
+   *     if (userMessages.length > 0) {
+   *       await validateUIMessages({ messages: userMessages, tools: chatTools });
+   *     }
+   *     return messages;
    *   },
    *   run: async ({ messages }) => {
    *     return streamText({ model, messages, tools: chatTools });
@@ -4477,6 +4928,7 @@ function chatCustomAgent<
       // No client-side upsert needed.
       locals.set(chatSessionHandleKey, sessions.open(payload.chatId));
       locals.set(chatAgentRunContextKey, runOptions.ctx);
+      markChatAgentRunForStreamsWarning();
       taskContext.setConversationId(payload.chatId);
       stampConversationIdOnActiveSpan(payload.chatId);
       return userRun(payload, runOptions);
@@ -4506,6 +4958,7 @@ function chatAgent<
     run: userRun,
     clientDataSchema,
     onBoot,
+    onRecoveryBoot,
     onPreload,
     onChatStart,
     onValidateMessages,
@@ -4570,6 +5023,10 @@ function chatAgent<
       // `chat.createStartSessionAction` or browser-direct) before this
       // run is triggered — no client-side upsert needed here.
       locals.set(chatSessionHandleKey, sessions.open(payload.chatId));
+      // Mutable holder; advances in `writeTurnCompleteChunk` after each turn
+      // and is the trim target for the NEXT turn's trim record.
+      locals.set(lastTurnCompleteSeqNumKey, { value: undefined });
+      markChatAgentRunForStreamsWarning();
       taskContext.setConversationId(payload.chatId);
 
       // Stamp `gen_ai.conversation.id` on the run-level span. Every
@@ -4632,91 +5089,335 @@ function chatAgent<
       // swallow errors internally; the agent stays available either way.
       const sessionIdForSnapshot = payload.sessionId ?? payload.chatId;
       let bootSnapshot: ChatSnapshotV1<TUIMessage> | undefined;
-      let replayed: TUIMessage[] = [];
+      let replayedSettled: TUIMessage[] = [];
+      let replayedPartial: TUIMessage | undefined;
+      let replayedPartialRaw: TUIMessage | undefined;
+      let replayedInTail: { message: TUIMessage; metadata: unknown; seqNum: number }[] = [];
+      // Wire payloads to dispatch as turns before the regular session.in
+      // pump kicks in. Populated by `onRecoveryBoot.recoveredTurns` (or its
+      // default, `inFlightUsers`). The turn-loop checks this queue ahead of
+      // `messagesInput.waitWithIdleTimeout` so recovered turns fire first.
+      const bootInjectedQueue: ChatTaskWirePayload<
+        TUIMessage,
+        inferSchemaIn<TClientDataSchema>
+      >[] = [];
       const couldHavePriorState =
         payload.continuation === true || ctx.attempt.number > 1;
 
       if (!hydrateMessages && couldHavePriorState) {
-        try {
-          bootSnapshot = await tracer.startActiveSpan(
-            "chat.boot.snapshot.read",
-            async () => readChatSnapshot<TUIMessage>(sessionIdForSnapshot)
-          );
-        } catch (error) {
-          // `readChatSnapshot` already swallows + warns internally; this catch
-          // is just belt-and-suspenders against tracer/span errors.
-          logger.warn("chat.agent: snapshot read failed; continuing without snapshot", {
-            error: error instanceof Error ? error.message : String(error),
-            sessionId: sessionIdForSnapshot,
-          });
-        }
+        // Single parent span for the whole boot read phase — snapshot
+        // read, session.out replay, session.in replay. Per-phase timing
+        // + result counts are attributes on the span.
+        await tracer.startActiveSpan(
+          "chat.boot",
+          async (bootSpan) => {
+            // snapshot read
+            const snapStart = Date.now();
+            try {
+              bootSnapshot = await readChatSnapshot<TUIMessage>(sessionIdForSnapshot);
+            } catch (error) {
+              // `readChatSnapshot` already swallows + warns internally; this catch
+              // is just belt-and-suspenders against tracer/span errors.
+              logger.warn(
+                "chat.agent: snapshot read failed; continuing without snapshot",
+                {
+                  error: error instanceof Error ? error.message : String(error),
+                  sessionId: sessionIdForSnapshot,
+                }
+              );
+            }
+            bootSpan.setAttribute("chat.boot.snapshot.durationMs", Date.now() - snapStart);
+            bootSpan.setAttribute("chat.boot.snapshot.present", !!bootSnapshot);
+            bootSpan.setAttribute(
+              "chat.boot.snapshot.messageCount",
+              bootSnapshot?.messages?.length ?? 0
+            );
 
-        try {
-          replayed = await tracer.startActiveSpan("chat.boot.replay", async () =>
-            replaySessionOutTail<TUIMessage>(sessionIdForSnapshot, {
-              lastEventId: bootSnapshot?.lastOutEventId,
-            })
-          );
-        } catch (error) {
-          logger.warn("chat.agent: session.out replay failed; using snapshot only", {
-            error: error instanceof Error ? error.message : String(error),
-            sessionId: sessionIdForSnapshot,
-          });
-        }
+            // Seed the trim chain from the snapshot's `lastOutEventId` (the SSE
+            // id of the previous turn's `turn-complete` control record). The
+            // first turn-complete this worker writes will then trim back to it.
+            // Without seeding, the new worker would emit no trim on its first
+            // turn (chain self-bootstraps from turn 2), so this is purely an
+            // optimization to keep continuation runs bounded from the first turn.
+            if (bootSnapshot?.lastOutEventId !== undefined) {
+              const seeded = Number.parseInt(bootSnapshot.lastOutEventId, 10);
+              if (Number.isFinite(seeded)) {
+                const slot = locals.get(lastTurnCompleteSeqNumKey);
+                if (slot) slot.value = seeded;
+              }
+            }
+
+            // session.out replay
+            const replayOutStart = Date.now();
+            try {
+              const replayResult = await replaySessionOutTail<TUIMessage>(
+                sessionIdForSnapshot,
+                { lastEventId: bootSnapshot?.lastOutEventId }
+              );
+              replayedSettled = replayResult.settled;
+              replayedPartial = replayResult.partial;
+              replayedPartialRaw = replayResult.partialRaw;
+            } catch (error) {
+              logger.warn(
+                "chat.agent: session.out replay failed; using snapshot only",
+                {
+                  error: error instanceof Error ? error.message : String(error),
+                  sessionId: sessionIdForSnapshot,
+                }
+              );
+            }
+            bootSpan.setAttribute(
+              "chat.boot.replay.out.durationMs",
+              Date.now() - replayOutStart
+            );
+            bootSpan.setAttribute("chat.boot.replay.out.settledCount", replayedSettled.length);
+            bootSpan.setAttribute(
+              "chat.boot.replay.out.partialPresent",
+              replayedPartial !== undefined
+            );
+
+            // session.in tail read
+            //
+            // session.in carries the user-side of the conversation
+            // (ChatInputChunk records). On a continuation boot we read past
+            // the last turn-complete's `session-in-event-id` header so any
+            // user message the dead predecessor hadn't acknowledged surfaces
+            // here. Without this read, in-flight user messages would only be
+            // visible via the live SSE subscription — by which point they
+            // would arrive AFTER the partial-assistant orphan and look like
+            // brand-new turns to the model, producing inverted chains.
+            const replayInStart = Date.now();
+            const lastInEventId = await findLatestSessionInCursor(payload.chatId)
+              .then((cursor) => (cursor !== undefined ? String(cursor) : undefined))
+              .catch(() => undefined);
+            try {
+              replayedInTail = await replaySessionInTail<TUIMessage>(payload.chatId, {
+                lastEventId: lastInEventId,
+              });
+            } catch (error) {
+              logger.warn(
+                "chat.agent: session.in replay failed; in-flight users may not be recovered",
+                { error: error instanceof Error ? error.message : String(error) }
+              );
+            }
+            bootSpan.setAttribute(
+              "chat.boot.replay.in.durationMs",
+              Date.now() - replayInStart
+            );
+            bootSpan.setAttribute(
+              "chat.boot.replay.in.userCount",
+              replayedInTail.length
+            );
+          },
+          {
+            attributes: {
+              [SemanticInternalAttributes.STYLE_ICON]: "tabler-rotate-clockwise",
+              [SemanticInternalAttributes.COLLAPSED]: true,
+              "chat.id": payload.chatId,
+              "chat.continuation": payload.continuation ?? false,
+              "chat.attempt": ctx.attempt.number,
+            },
+          }
+        );
       }
 
-      // ── session.in dedup cutoff ────────────────────────────────────
+      // ── session.in resume cursor ───────────────────────────────────
       //
       // A fresh worker subscribes to `session.in` from seq 0 and would
       // re-deliver every record ever appended — including user messages
-      // from turns already completed on a prior run. Without dedup, the
-      // loop would re-process them as fresh turns and the slim-wire merge
-      // would replace-by-id against the snapshot-restored copies, yielding
-      // no-op replaces while the customer's actual new message waits in
-      // the queue.
+      // from turns already completed on a prior run. Without a cursor,
+      // the loop would re-process them as fresh turns and the slim-wire
+      // merge would replace-by-id against snapshot-restored copies,
+      // yielding no-op replaces while the customer's actual new message
+      // waits in the queue.
       //
-      // The cutoff is the timestamp of the last `trigger:turn-complete`
-      // chunk on `session.out`. When we have a snapshot, that timestamp is
-      // already in `lastOutTimestamp` — use it directly to skip the
-      // O(stream-length) scan. Fall back to the scan only when no snapshot
-      // is available (first-ever OOM retry, or `hydrateMessages`
-      // short-circuited the snapshot read).
+      // The cursor is the seq_num of the last `.in` record the prior
+      // worker committed to processing, persisted on each `turn-complete`
+      // control record as a `session-in-event-id` sibling header. The
+      // boot scan reads the header off `.out`'s latest turn-complete and
+      // seeds the manager so the upcoming `.in` SSE subscribe opens with
+      // `Last-Event-ID: <cursor>` — S2 starts after that seq and old
+      // messages never reach this worker.
       //
-      // Applies in three cases (any of which means session.in has records
+      // Applies in three cases (any of which means `.in` has records
       // belonging to completed turns the new run should skip):
       //  - OOM retry (`ctx.attempt.number > 1`)
       //  - Continuation run (`payload.continuation === true`) — prior run
       //    crashed / was canceled / requested upgrade
       //  - Snapshot exists at all (catches edge cases where the wire
       //    didn't set `continuation` but a snapshot indicates prior turns)
-      const needsDedupCutoff =
+      const needsResumeCursor =
         ctx.attempt.number > 1 ||
         payload.continuation === true ||
         bootSnapshot !== undefined;
 
-      if (needsDedupCutoff) {
+      if (needsResumeCursor) {
         try {
-          let cutoff = bootSnapshot?.lastOutTimestamp;
-          if (cutoff === undefined) {
-            cutoff = await findLatestTurnCompleteTimestamp(payload.chatId);
-          }
-          if (cutoff !== undefined) {
-            sessionStreams.setMinTimestamp(payload.chatId, "in", cutoff);
+          const cursor = await findLatestSessionInCursor(payload.chatId);
+          if (cursor !== undefined) {
+            sessionStreams.setLastSeqNum(payload.chatId, "in", cursor);
+            sessionStreams.setLastDispatchedSeqNum(payload.chatId, "in", cursor);
           }
         } catch (error) {
           logger.warn(
-            "chat.agent: session.in dedup cutoff lookup failed; old messages may replay",
+            "chat.agent: session.in resume cursor lookup failed; old messages may replay",
             { error: error instanceof Error ? error.message : String(error) }
           );
         }
       }
 
-      // ── Merge + head-start bootstrap ────────────────────────────────
+      // ── Recovery boot + chain reconstruction ────────────────────────
       if (!hydrateMessages) {
-        accumulatedUIMessages = mergeByIdReplaceWins<TUIMessage>(
+        const settledMessages = mergeByIdReplaceWins<TUIMessage>(
           (bootSnapshot?.messages as TUIMessage[]) ?? [],
-          replayed
+          replayedSettled
         );
+        const inFlightUsers = replayedInTail.map((r) => r.message);
+        const partialAssistant = replayedPartial;
+        // Fire the hook only when there's a partial assistant — the
+        // mid-stream-died signal. In-flight users alone (no partial)
+        // cover graceful exits like `chat.requestUpgrade()` where the
+        // predecessor chose to end before processing the message;
+        // those route through the normal continuation-wait path.
+        const hasRecoveredState = partialAssistant !== undefined;
+
+        let hookChain: TUIMessage[] | undefined;
+        let hookRecoveredTurns: TUIMessage[] | undefined;
+        let hookBeforeBoot: (() => Promise<void>) | undefined;
+        if (couldHavePriorState && hasRecoveredState && onRecoveryBoot) {
+          // Extract from the RAW partial (pre-cleanup). `cleanupAbortedParts`
+          // strips exactly the input-streaming / input-available tool parts
+          // we want to surface here, so the cleaned `partialAssistant` would
+          // always report zero pending tool calls.
+          const pendingToolCalls = extractPendingToolCallsFromPartial(replayedPartialRaw);
+          const previousRunIdForHook = previousRunId ?? "";
+          let hookResult: RecoveryBootResult<TUIMessage> | void = undefined;
+          const { writer: hookWriter, flush: hookFlush } = createLazyChatWriter();
+          try {
+            hookResult = await tracer.startActiveSpan(
+              "onRecoveryBoot()",
+              async () =>
+                onRecoveryBoot({
+                  ctx,
+                  chatId: payload.chatId,
+                  runId: ctx.run.id,
+                  previousRunId: previousRunIdForHook,
+                  cause: "unknown",
+                  settledMessages,
+                  inFlightUsers,
+                  partialAssistant,
+                  pendingToolCalls,
+                  writer: hookWriter,
+                }),
+              {
+                attributes: {
+                  [SemanticInternalAttributes.STYLE_ICON]: "task-hook-onStart",
+                  [SemanticInternalAttributes.COLLAPSED]: true,
+                  "chat.id": payload.chatId,
+                },
+              }
+            );
+          } catch (error) {
+            logger.warn("chat.agent: onRecoveryBoot threw; using defaults", {
+              error: error instanceof Error ? error.message : String(error),
+              chatId: payload.chatId,
+            });
+          }
+          // Flush any chunks the hook wrote so they land on session.out
+          // BEFORE the first recovered turn fires.
+          try {
+            await hookFlush();
+          } catch (error) {
+            logger.warn("chat.agent: onRecoveryBoot writer flush failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          if (hookResult && typeof hookResult === "object") {
+            if (Array.isArray(hookResult.chain)) hookChain = hookResult.chain;
+            if (Array.isArray(hookResult.recoveredTurns))
+              hookRecoveredTurns = hookResult.recoveredTurns;
+            if (typeof hookResult.beforeBoot === "function")
+              hookBeforeBoot = hookResult.beforeBoot;
+          }
+        }
+
+        // Default: splice partial + the user it was answering into
+        // the chain so follow-ups like "keep going" still have context.
+        let seedChain: TUIMessage[];
+        let recoveredTurns: TUIMessage[];
+        if (hookChain !== undefined) {
+          seedChain = hookChain;
+        } else if (partialAssistant !== undefined && inFlightUsers.length > 0) {
+          seedChain = [...settledMessages, inFlightUsers[0]!, partialAssistant];
+        } else {
+          seedChain = settledMessages;
+        }
+        if (hookRecoveredTurns !== undefined) {
+          recoveredTurns = hookRecoveredTurns;
+        } else if (partialAssistant !== undefined && inFlightUsers.length > 0) {
+          recoveredTurns = inFlightUsers.slice(1);
+        } else {
+          recoveredTurns = inFlightUsers;
+        }
+        // `beforeBoot` errors bubble — the customer opted into blocking
+        // persistence and a failure there should fail the run rather than
+        // dispatch recovered turns against half-persisted state.
+        if (hookBeforeBoot) {
+          await hookBeforeBoot();
+        }
+
+        // Advance the session.in cursor past every recovered user so
+        // the live subscription doesn't re-deliver them.
+        if (replayedInTail.length > 0) {
+          const lastRecoveredSeq = replayedInTail[replayedInTail.length - 1]!.seqNum;
+          const currentCursor = sessionStreams.lastSeqNum(payload.chatId, "in");
+          if (currentCursor === undefined || lastRecoveredSeq > currentCursor) {
+            sessionStreams.setLastSeqNum(payload.chatId, "in", lastRecoveredSeq);
+            sessionStreams.setLastDispatchedSeqNum(payload.chatId, "in", lastRecoveredSeq);
+          }
+        }
+
+        // Synthesize wire payloads for each recoveredTurn. The turn-loop
+        // pops these ahead of `messagesInput.waitWithIdleTimeout` so they
+        // dispatch as normal turns with the existing hook stack.
+        //
+        // Per-record metadata preservation: each session.in record
+        // carries its own `payload.metadata` (the transport sets it at
+        // send time). Look up the original by message id so a recovered
+        // turn dispatches with the metadata its writer actually sent.
+        // Fall back to the boot payload's metadata for hook-synthesized
+        // messages (customer returned a recoveredTurn with no matching
+        // session.in record).
+        //
+        // OOM-retry dedup: if `payload.message` is the same user message
+        // the queue is about to redispatch (the wire payload survives
+        // across attempts, but session.in records it once), the wire
+        // payload already runs turn 0 — drop the duplicate from the queue
+        // so we don't fire the same turn twice.
+        const wireMessageId =
+          (payload.message as { id?: string } | undefined)?.id;
+        const metadataById = new Map<string, unknown>();
+        for (const entry of replayedInTail) {
+          metadataById.set(entry.message.id, entry.metadata);
+        }
+        for (const msg of recoveredTurns) {
+          if (wireMessageId && msg.id === wireMessageId) continue;
+          const recoveredMetadata = metadataById.has(msg.id)
+            ? metadataById.get(msg.id)
+            : payload.metadata;
+          bootInjectedQueue.push({
+            chatId: payload.chatId,
+            sessionId: payload.sessionId,
+            metadata: recoveredMetadata,
+            trigger: "submit-message",
+            message: msg,
+            messageId: msg.id,
+            continuation: payload.continuation,
+            previousRunId: payload.previousRunId,
+          } as ChatTaskWirePayload<TUIMessage, inferSchemaIn<TClientDataSchema>>);
+        }
+
+        accumulatedUIMessages = seedChain;
 
         // ── Head-start bootstrap ─────────────────────────────────────
         //
@@ -5088,6 +5789,15 @@ function chatAgent<
             parseClientData ? await parseClientData(payload.metadata) : payload.metadata
           ) as inferSchemaOut<TClientDataSchema>;
 
+          // Recovery-boot injection: if `onRecoveryBoot` (or its default
+          // `inFlightUsers`) populated `bootInjectedQueue`, dispatch the
+          // first synthesized payload as the very first turn instead of
+          // waiting on the live session.in. Subsequent recovered turns
+          // get drained by the end-of-turn picker below.
+          if (bootInjectedQueue.length > 0) {
+            currentWirePayload = bootInjectedQueue.shift()!;
+          } else {
+
           const effectiveIdleTimeout =
             idleTimeoutInSeconds ?? payload.idleTimeoutInSeconds;
           const effectiveTurnTimeout =
@@ -5160,6 +5870,7 @@ function chatAgent<
           if (currentWirePayload.trigger === "close") {
             return;
           }
+          } // end else (no boot-injected first turn)
         }
 
         for (let turn = 0; turn < maxTurns; turn++) {
@@ -5447,6 +6158,20 @@ function chatAgent<
                   }
 
                   if (hydrateMessages) {
+                    // Snapshot the ids the accumulator knew BEFORE this
+                    // turn ran — used below to decide whether an
+                    // incoming wire message is genuinely new or just a
+                    // state advance on an existing entry. We can't use
+                    // the post-`hydrateMessages` array for this because
+                    // the canonical hook pattern pushes the incoming
+                    // user message into the persisted chain and
+                    // returns it.
+                    const previouslyKnownMessageIds = new Set(
+                      accumulatedUIMessages
+                        .map((m) => m.id)
+                        .filter((id): id is string => typeof id === "string")
+                    );
+
                     // Backend hydration: load the full message history from the user's
                     // backend, replacing the built-in accumulator entirely. With slim
                     // wire, `incomingMessages` is consistently 0-or-1-length — what
@@ -5480,15 +6205,23 @@ function chatAgent<
                       }
                     );
 
-                    // Auto-merge tool approval updates: if any incoming wire message
-                    // has an ID that matches a hydrated message, replace it. This makes
-                    // tool approvals work transparently with backend hydration.
+                    // Per-turn merge of incoming wire messages onto the hydrated
+                    // chain. Hydrated stays authoritative for text, reasoning
+                    // blobs, provider metadata, and tool `input`; we only
+                    // overlay tool-part state/output/errorText for tool calls
+                    // the wire copy has just resolved. Apps that slim the wire
+                    // copy to fit the .in/append cap (or drop fields they
+                    // re-source from their own DB) get the hydrated copy
+                    // through unchanged.
                     const merged = [...hydrated] as TUIMessage[];
                     for (const incoming of cleanedUIMessages) {
                       if (!incoming.id) continue;
                       const idx = merged.findIndex((m) => m.id === incoming.id);
                       if (idx !== -1) {
-                        merged[idx] = incoming as TUIMessage;
+                        merged[idx] = mergeIncomingIntoHydrated(
+                          merged[idx]!,
+                          incoming
+                        ) as TUIMessage;
                       }
                     }
 
@@ -5496,15 +6229,32 @@ function chatAgent<
                     accumulatedMessages = await toModelMessages(merged);
                     locals.set(chatCurrentUIMessagesKey, accumulatedUIMessages);
 
-                    // Track new messages for onTurnComplete.newUIMessages
+                    // Track new messages for onTurnComplete.newUIMessages.
+                    // Only push for genuinely new ids — HITL continuations
+                    // whose incoming wire id matches an existing entry are
+                    // state advances on an old message, not new messages.
+                    // We compare against `previouslyKnownMessageIds`
+                    // captured BEFORE hydration, not against `hydrated`:
+                    // the canonical hydrate pattern pushes the incoming
+                    // user message into the persisted chain and returns
+                    // it, so the new id IS in `hydrated`, which would
+                    // wrongly drop every fresh user turn from
+                    // `newUIMessages`. The non-hydrate branch below has
+                    // the same "push only on append" semantic via its
+                    // own append-vs-replace path.
                     if (
                       currentWirePayload.trigger === "submit-message" &&
                       cleanedUIMessages.length > 0
                     ) {
                       const lastUI = cleanedUIMessages[cleanedUIMessages.length - 1]!;
-                      turnNewUIMessages.push(lastUI);
-                      const lastModel = (await toModelMessages([lastUI]))[0];
-                      if (lastModel) turnNewModelMessages.push(lastModel);
+                      const matchedExisting =
+                        lastUI.id !== undefined &&
+                        previouslyKnownMessageIds.has(lastUI.id);
+                      if (!matchedExisting) {
+                        turnNewUIMessages.push(lastUI);
+                        const lastModel = (await toModelMessages([lastUI]))[0];
+                        if (lastModel) turnNewModelMessages.push(lastModel);
+                      }
                     }
                   } else {
                     // Default delta-merge accumulation.
@@ -5530,15 +6280,17 @@ function chatAgent<
                     } else if (cleanedUIMessages.length > 0) {
                       // Submit-message (and the special-cased
                       // handover-prepare → submit-message rewrite earlier in
-                      // this scope): append-or-replace-by-id for the single
-                      // delta message.
+                      // this scope): merge-or-append for the single delta
+                      // message.
                       //
                       // Tool approval responses arrive as a single assistant
                       // message whose id collides with the existing assistant
-                      // in the accumulator — we replace by id. The fallback
-                      // for HITL `addToolOutput` continuations where AI SDK
-                      // regenerates the id (TRI-9137) still applies via
-                      // `rewriteIncomingIdViaToolCallMap`.
+                      // in the accumulator — we merge the resolved tool-part
+                      // resolutions onto the existing entry, keeping text,
+                      // reasoning, and tool `input` from the prior snapshot.
+                      // The fallback for HITL `addToolOutput` continuations
+                      // where AI SDK regenerates the id (TRI-9137) still
+                      // applies via `rewriteIncomingIdViaToolCallMap`.
                       let replaced = false;
                       for (const raw of cleanedUIMessages) {
                         let incoming = raw;
@@ -5555,7 +6307,10 @@ function chatAgent<
                           }
                         }
                         if (idx !== -1) {
-                          accumulatedUIMessages[idx] = incoming as TUIMessage;
+                          accumulatedUIMessages[idx] = mergeIncomingIntoHydrated(
+                            accumulatedUIMessages[idx]!,
+                            incoming
+                          ) as TUIMessage;
                           replaced = true;
                         } else {
                           accumulatedUIMessages.push(incoming as TUIMessage);
@@ -6409,16 +7164,7 @@ function chatAgent<
                             version: 1,
                             savedAt: Date.now(),
                             messages: accumulatedUIMessages,
-                            // `StreamWriteResult` exposes `lastEventId` only;
-                            // use the snapshot save time as the
-                            // `lastOutTimestamp` cutoff hint. The OOM-retry
-                            // optimization compares this to SSE chunk
-                            // timestamps (ms epoch on the server) — Date.now()
-                            // here is the closest cheap approximation
-                            // available client-side and is consistent with
-                            // the existing turn-complete chunk emission.
                             lastOutEventId: turnCompleteResult?.lastEventId,
-                            lastOutTimestamp: Date.now(),
                           });
                         },
                         {
@@ -6449,6 +7195,15 @@ function chatAgent<
                   // chat.defer + chat.inject) run during the idle wait. If they complete
                   // before the next message, their injected context is picked up in prepareStep.
                   // The pre-onBeforeTurnComplete drain handles promises from onTurnStart/run().
+
+                  // Recovery-boot injection: drain remaining recovered turns
+                  // before any other source. `onRecoveryBoot` (or its default)
+                  // produced these from in-flight user messages on session.in
+                  // that the dead predecessor never acknowledged.
+                  if (bootInjectedQueue.length > 0) {
+                    currentWirePayload = bootInjectedQueue.shift()!;
+                    return "continue";
+                  }
 
                   // If messages arrived during streaming (without pendingMessages config),
                   // use the first one immediately as the next turn.
@@ -6597,6 +7352,14 @@ function chatAgent<
                 locals.get(chatEndRunRequestedKey)
               ) {
                 return;
+              }
+
+              // Drain remaining recovered turns before idling — a thrown
+              // recovered turn shouldn't strand the rest of the boot queue
+              // until an unrelated live message arrives.
+              if (bootInjectedQueue.length > 0) {
+                currentWirePayload = bootInjectedQueue.shift()!;
+                continue;
               }
 
               // Wait for the next message — same as after a successful turn
@@ -6918,6 +7681,7 @@ function createChatBuilder<
         ...(config.clientDataSchema ? { clientDataSchema: config.clientDataSchema } : {}),
         uiMessageStreamOptions: mergedUiStream,
         onBoot: composeHooks(config.hooks.onBoot, options.onBoot),
+        onRecoveryBoot: options.onRecoveryBoot,
         onPreload: composeHooks(config.hooks.onPreload, options.onPreload),
         onChatStart: composeHooks(config.hooks.onChatStart, options.onChatStart),
         onTurnStart: composeHooks(config.hooks.onTurnStart, options.onTurnStart),
@@ -8386,6 +9150,32 @@ export type { InferChatClientData, InferChatUIMessage } from "./ai-shared.js";
 /**
  * Options for {@link createChatStartSessionAction}.
  */
+/**
+ * Discriminator for per-endpoint `baseURL` / `fetch` callbacks on
+ * `createChatStartSessionAction`.
+ *
+ * - `"sessions"` — `POST /api/v1/sessions` (session create + first run trigger).
+ * - `"auth"` — `POST /api/v1/auth/jwt/claims` (only fired when
+ *   `tokenTTL` is set; otherwise the publicAccessToken from session create
+ *   is reused as-is).
+ */
+export type ChatStartSessionEndpoint = "sessions" | "auth";
+
+export type ChatStartSessionEndpointContext = {
+  endpoint: ChatStartSessionEndpoint;
+  chatId: string;
+};
+
+export type ChatStartSessionBaseURLResolver = (
+  ctx: ChatStartSessionEndpointContext
+) => string;
+
+export type ChatStartSessionFetchOverride = (
+  url: string,
+  init: RequestInit,
+  ctx: ChatStartSessionEndpointContext
+) => Promise<Response>;
+
 export type CreateChatStartSessionActionOptions = {
   /** TTL for the session-scoped public access token. @default "1h" */
   tokenTTL?: string | number | Date;
@@ -8394,14 +9184,37 @@ export type CreateChatStartSessionActionOptions = {
    * Per-call `params.triggerConfig` shallow-merges on top.
    */
   triggerConfig?: Partial<SessionTriggerConfig>;
+  /**
+   * Override the Trigger.dev API base URL. String applies to both
+   * `/api/v1/sessions` and `/api/v1/auth/jwt/claims`; function picks per
+   * endpoint. When unset, falls back to `apiClientManager.baseURL`
+   * (typically the `TRIGGER_API_URL` env var). Set this to route session
+   * create through a trusted edge proxy that injects server-side signal
+   * into `basePayload.metadata` before forwarding upstream.
+   */
+  baseURL?: string | ChatStartSessionBaseURLResolver;
+  /**
+   * Per-request fetch override. Receives the resolved URL, RequestInit,
+   * and endpoint context. Use for header injection, proxy routing, or
+   * custom retry. Applies to both session-create and JWT-claims POSTs.
+   */
+  fetch?: ChatStartSessionFetchOverride;
 };
 
 /**
  * Params for the function returned by {@link createChatStartSessionAction}.
  */
-export type ChatStartSessionParams = {
+export type ChatStartSessionParams<TChat extends AnyTask = AnyTask> = {
   /** Conversation id (mapped to the Session's `externalId`). */
   chatId: string;
+  /**
+   * Typed client data — folded into the first run's `payload.metadata` so
+   * `onPreload`, `onChatStart`, etc. see the same `clientData` shape on the
+   * first turn as subsequent turns get via the transport's `clientData`
+   * option. Typed via the agent's `clientDataSchema` when the action is
+   * parameterised with `createStartSessionAction<typeof myChat>(...)`.
+   */
+  clientData?: InferChatClientData<TChat>;
   /**
    * Per-call trigger config. Shallow-merged over the action's default
    * `triggerConfig`. `basePayload` is the customer's wire payload (for
@@ -8409,7 +9222,11 @@ export type ChatStartSessionParams = {
    * which the runtime injects automatically).
    */
   triggerConfig?: Partial<SessionTriggerConfig>;
-  /** Pass-through metadata folded into the session row. */
+  /**
+   * Opaque session-level metadata stored on the Session row. Separate from
+   * the per-turn `clientData` above. Use this when you want to attach
+   * server-side metadata that doesn't go through the agent's `clientDataSchema`.
+   */
   metadata?: Record<string, unknown>;
 };
 
@@ -8437,33 +9254,37 @@ export type ChatStartSessionResult = {
  * Wrap in a Next.js server action (or any server-side handler) so the
  * customer's secret key never crosses to the browser.
  *
+ * Parameterise the action with `<typeof yourChatAgent>` to type the
+ * `clientData` field against your agent's `clientDataSchema`.
+ *
  * @example
  * ```ts
  * // actions.ts
  * "use server";
  * import { chat } from "@trigger.dev/sdk/ai";
+ * import type { myChat } from "@/trigger/chat";
  *
- * export const startChatSession = chat.createStartSessionAction("my-chat", {
- *   triggerConfig: { machine: "small-1x" },
- * });
+ * export const startChatSession = chat.createStartSessionAction<typeof myChat>(
+ *   "my-chat",
+ *   { triggerConfig: { machine: "small-1x" } }
+ * );
  * ```
  *
- * Then in the browser:
+ * Then in the browser, threading the typed `clientData` from the transport:
  * ```tsx
- * const transport = useTriggerChatTransport({
+ * const transport = useTriggerChatTransport<typeof myChat>({
  *   task: "my-chat",
- *   accessToken: async ({ chatId }) => {
- *     const { publicAccessToken } = await startChatSession({ chatId });
- *     return publicAccessToken;
- *   },
+ *   accessToken: ({ chatId }) => mintChatAccessToken(chatId),
+ *   startSession: ({ chatId, clientData }) =>
+ *     startChatSession({ chatId, clientData }),
  * });
  * ```
  */
-function createChatStartSessionAction(
+function createChatStartSessionAction<TChat extends AnyTask = AnyTask>(
   taskId: string,
   options?: CreateChatStartSessionActionOptions
-): (params: ChatStartSessionParams) => Promise<ChatStartSessionResult> {
-  return async (params: ChatStartSessionParams): Promise<ChatStartSessionResult> => {
+): (params: ChatStartSessionParams<TChat>) => Promise<ChatStartSessionResult> {
+  return async (params: ChatStartSessionParams<TChat>): Promise<ChatStartSessionResult> => {
     if (!params.chatId) {
       throw new Error(
         "chat.createStartSessionAction: params.chatId is required — used as the session externalId."
@@ -8476,14 +9297,17 @@ function createChatStartSessionAction(
     // `onPreload` fires, the runtime opens its `.in` subscription, the
     // first user message arrives moments later via `.in/append`.
     //
-    // `metadata` is the customer's transport-level `clientData`,
-    // threaded through so the agent's `clientDataSchema` validates on
-    // the very first turn (the typical schema requires `userId` etc.).
+    // `clientData` is folded into `basePayload.metadata` so the agent's
+    // `clientDataSchema` validates on the very first turn against the same
+    // shape per-turn `metadata` carries via the transport.
     // Auto-tag every chat.agent run with `chat:{chatId}` so the dashboard /
     // run-list filter by chat works without the customer having to wire it
     // up. Mirrors the browser-mediated `TriggerChatTransport.doStart` path.
     const userTags = params.triggerConfig?.tags ?? options?.triggerConfig?.tags ?? [];
     const tags = [`chat:${params.chatId}`, ...userTags].slice(0, 5);
+
+    const clientDataMetadata =
+      params.clientData !== undefined ? { metadata: params.clientData } : {};
 
     const triggerConfig: SessionTriggerConfig = {
       basePayload: {
@@ -8491,6 +9315,7 @@ function createChatStartSessionAction(
         trigger: "preload",
         ...(options?.triggerConfig?.basePayload ?? {}),
         ...(params.triggerConfig?.basePayload ?? {}),
+        ...clientDataMetadata,
         chatId: params.chatId,
       },
       ...(options?.triggerConfig?.machine || params.triggerConfig?.machine
@@ -8517,13 +9342,26 @@ function createChatStartSessionAction(
         : {}),
     };
 
-    const created = await sessions.start({
-      type: "chat.agent",
+    const startBody = {
+      type: "chat.agent" as const,
       externalId: params.chatId,
       taskIdentifier: taskId,
       triggerConfig,
       metadata: params.metadata,
-    });
+    };
+
+    const baseURLOption = options?.baseURL;
+    const fetchOverride = options?.fetch;
+    const hasOverride = baseURLOption !== undefined || fetchOverride !== undefined;
+
+    const created: { id: string; runId: string; publicAccessToken: string } = hasOverride
+      ? await callSessionsCreateWithOverride({
+          chatId: params.chatId,
+          body: startBody,
+          baseURLOption,
+          fetchOverride,
+        })
+      : await sessions.start(startBody);
 
     // Session create returns a session PAT directly when called with a
     // start token, but when the SDK call goes via the secret key we still
@@ -8531,13 +9369,20 @@ function createChatStartSessionAction(
     // re-minting here lets the customer override `tokenTTL`).
     const publicAccessToken =
       options?.tokenTTL !== undefined
-        ? await auth.createPublicToken({
-            scopes: {
-              read: { sessions: params.chatId },
-              write: { sessions: params.chatId },
-            },
-            expirationTime: options.tokenTTL,
-          })
+        ? hasOverride
+          ? await mintPublicTokenWithOverride({
+              chatId: params.chatId,
+              expirationTime: options.tokenTTL,
+              baseURLOption,
+              fetchOverride,
+            })
+          : await auth.createPublicToken({
+              scopes: {
+                read: { sessions: params.chatId },
+                write: { sessions: params.chatId },
+              },
+              expirationTime: options.tokenTTL,
+            })
         : created.publicAccessToken;
 
     return {
@@ -8546,6 +9391,101 @@ function createChatStartSessionAction(
       sessionId: created.id,
     };
   };
+}
+
+function resolveChatStartBaseURL(
+  endpoint: ChatStartSessionEndpoint,
+  chatId: string,
+  option: string | ChatStartSessionBaseURLResolver | undefined
+): string {
+  const fallback = apiClientManager.baseURL ?? "https://api.trigger.dev";
+  const raw =
+    typeof option === "function"
+      ? option({ endpoint, chatId })
+      : option ?? fallback;
+  return raw.replace(/\/$/, "");
+}
+
+function overrideRequestHeaders(accessToken: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${accessToken}`,
+    "x-trigger-source": "sdk",
+  };
+  // Forward the preview-branch hint so override-mode requests land on the
+  // same env the standard ApiClient path would have routed to. Mirrors
+  // ApiClient.#getHeaders. Read from TRIGGER_PREVIEW_BRANCH /
+  // VERCEL_GIT_COMMIT_REF via apiClientManager.branchName.
+  if (apiClientManager.branchName) {
+    headers["x-trigger-branch"] = apiClientManager.branchName;
+  }
+  return headers;
+}
+
+async function callSessionsCreateWithOverride(args: {
+  chatId: string;
+  body: { type: "chat.agent"; externalId: string; taskIdentifier: string; triggerConfig: SessionTriggerConfig; metadata?: Record<string, unknown> };
+  baseURLOption: string | ChatStartSessionBaseURLResolver | undefined;
+  fetchOverride: ChatStartSessionFetchOverride | undefined;
+}): Promise<{ id: string; runId: string; publicAccessToken: string }> {
+  const accessToken = apiClientManager.accessToken;
+  if (!accessToken) {
+    throw new Error(
+      "chat.createStartSessionAction: no API access token configured. Set TRIGGER_SECRET_KEY or call apiClientManager.setGlobalAPIClientConfiguration before invoking the action."
+    );
+  }
+  const ctx: ChatStartSessionEndpointContext = { endpoint: "sessions", chatId: args.chatId };
+  const url = `${resolveChatStartBaseURL("sessions", args.chatId, args.baseURLOption)}/api/v1/sessions`;
+  const init: RequestInit = {
+    method: "POST",
+    headers: overrideRequestHeaders(accessToken),
+    body: JSON.stringify(args.body),
+  };
+  const response = args.fetchOverride
+    ? await args.fetchOverride(url, init, ctx)
+    : await fetch(url, init);
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`sessions.start failed: ${response.status} ${text}`);
+  }
+  const json = (await response.json()) as { id: string; runId: string; publicAccessToken: string };
+  return json;
+}
+
+async function mintPublicTokenWithOverride(args: {
+  chatId: string;
+  expirationTime: string | number | Date;
+  baseURLOption: string | ChatStartSessionBaseURLResolver | undefined;
+  fetchOverride: ChatStartSessionFetchOverride | undefined;
+}): Promise<string> {
+  const accessToken = apiClientManager.accessToken;
+  if (!accessToken) {
+    throw new Error(
+      "chat.createStartSessionAction: no API access token configured for JWT mint."
+    );
+  }
+  const ctx: ChatStartSessionEndpointContext = { endpoint: "auth", chatId: args.chatId };
+  const url = `${resolveChatStartBaseURL("auth", args.chatId, args.baseURLOption)}/api/v1/auth/jwt/claims`;
+  const init: RequestInit = {
+    method: "POST",
+    headers: overrideRequestHeaders(accessToken),
+  };
+  const response = args.fetchOverride
+    ? await args.fetchOverride(url, init, ctx)
+    : await fetch(url, init);
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`auth.createPublicToken failed: ${response.status} ${text}`);
+  }
+  const claims = (await response.json()) as Record<string, unknown>;
+  return generateJWT({
+    secretKey: accessToken,
+    payload: {
+      ...claims,
+      scopes: [`read:sessions:${args.chatId}`, `write:sessions:${args.chatId}`],
+    },
+    expirationTime: args.expirationTime,
+  });
 }
 
 export const chat = {
@@ -8657,27 +9597,74 @@ export const chat = {
 };
 
 /**
- * Writes a turn-complete control chunk to the chat output stream.
- * The frontend transport intercepts this to close the ReadableStream for the current turn.
+ * Writes a `turn-complete` control record to the chat output stream and,
+ * if we have a prior turn-complete's seq_num, appends an S2 `trim` command
+ * record back to it — keeping `session.out` bounded to roughly one turn
+ * at steady state.
+ *
+ * The control record's body is empty; `trigger-control: turn-complete`
+ * plus an optional `public-access-token` ride on the headers (see
+ * `docs/ai-chat/client-protocol.mdx`). SDK transports filter it from the
+ * consumer chunk stream and surface it via `onControl` / `onTurnComplete`.
+ *
+ * Trim is opportunistic and monotonic at S2's layer. A failed trim is
+ * logged and swallowed; the next turn will retry against a fresher
+ * target seq_num.
+ *
  * @internal
  */
 async function writeTurnCompleteChunk(
-  chatId?: string,
+  _chatId?: string,
   publicAccessToken?: string
 ): Promise<StreamWriteResult> {
-  const { waitUntilComplete } = chatStream.writer({
-    spanName: "turn complete",
-    collapsed: true,
-    execute: ({ write }) => {
-      // Transport-intercepted control chunk — not a valid UIMessageChunk
-      // type but travels on the same session.out stream.
-      write({
-        type: "trigger:turn-complete",
-        ...(publicAccessToken ? { publicAccessToken } : {}),
-      } as unknown as UIMessageChunk);
-    },
-  });
-  return await waitUntilComplete();
+  const session = getChatSession();
+
+  // 1. Write the turn-complete control record. The ack's `lastEventId` is
+  //    this record's seq_num — that's the trim target for the NEXT turn.
+  //
+  //    Sibling headers:
+  //    - `public-access-token` (optional): refresh token surfaced to
+  //      browser-side transports via `onTurnComplete`.
+  //    - `session-in-event-id` (optional): the committed-consume cursor
+  //      on `.in` as of this turn-complete. On next worker boot, the
+  //      boot scan reads this back and seeds the `.in` subscription so
+  //      already-processed user messages aren't re-delivered.
+  const extraHeaders: Array<[string, string]> = [];
+  if (publicAccessToken) {
+    extraHeaders.push(["public-access-token", publicAccessToken]);
+  }
+  const inCursor = session.in.lastDispatchedSeqNum();
+  if (inCursor !== undefined) {
+    extraHeaders.push([SESSION_IN_EVENT_ID_HEADER, String(inCursor)]);
+  }
+  const result = await session.out.writeControl(
+    TRIGGER_CONTROL_SUBTYPE.TURN_COMPLETE,
+    extraHeaders
+  );
+  const T_N = result.lastEventId ? Number.parseInt(result.lastEventId, 10) : undefined;
+
+  // 2. Trim back to the previous turn-complete, if we have one. Skipping on
+  //    first-turn-ever (or first turn post-OOM without a snapshot seed) is
+  //    fine — the chain catches up next turn.
+  const slot = locals.get(lastTurnCompleteSeqNumKey);
+  const prev = slot?.value;
+  if (slot && prev !== undefined) {
+    try {
+      await session.out.trimTo(prev);
+    } catch (err) {
+      logger.warn("chat.agent: trim failed; will retry next turn", {
+        error: err instanceof Error ? err.message : String(err),
+        prev,
+      });
+    }
+  }
+
+  // 3. Advance the slot so the next turn-complete trims back to this one.
+  if (slot && T_N !== undefined && Number.isFinite(T_N)) {
+    slot.value = T_N;
+  }
+
+  return result;
 }
 
 /**
@@ -8725,16 +9712,8 @@ async function writeUpgradeRequiredChunk(): Promise<StreamWriteResult> {
     }
   }
 
-  const { waitUntilComplete } = chatStream.writer({
-    spanName: "upgrade required",
-    collapsed: true,
-    execute: ({ write }) => {
-      write({
-        type: "trigger:upgrade-required",
-      } as unknown as UIMessageChunk);
-    },
-  });
-  return await waitUntilComplete();
+  const session = getChatSession();
+  return session.out.writeControl(TRIGGER_CONTROL_SUBTYPE.UPGRADE_REQUIRED);
 }
 
 /**

@@ -134,6 +134,7 @@ const EnvironmentSchema = z
     ELECTRIC_ORIGIN_SHARDS: z.string().optional(),
     APP_ENV: z.string().default(process.env.NODE_ENV),
     SERVICE_NAME: z.string().default("trigger.dev webapp"),
+    SENTRY_DSN: z.string().optional(),
     POSTHOG_PROJECT_KEY: z.string().default("phc_LFH7kJiGhdIlnO22hTAKgHpaKhpM8gkzWAFvHmf5vfS"),
     TRIGGER_TELEMETRY_DISABLED: z.string().optional(),
     AUTH_GITHUB_CLIENT_ID: z.string().optional(),
@@ -491,7 +492,10 @@ const EnvironmentSchema = z
     // If specified, you must configure the corresponding provider using OBJECT_STORE_{PROTOCOL}_* env vars.
     // Example: OBJECT_STORE_DEFAULT_PROTOCOL=s3 requires OBJECT_STORE_S3_BASE_URL, OBJECT_STORE_S3_ACCESS_KEY_ID, etc.
     // Enables zero-downtime migration between providers (old data keeps working, new data uses new provider).
-    OBJECT_STORE_DEFAULT_PROTOCOL: z.string().regex(/^[a-z0-9]+$/).optional(),
+    OBJECT_STORE_DEFAULT_PROTOCOL: z
+      .string()
+      .regex(/^[a-z0-9]+$/)
+      .optional(),
 
     ARTIFACTS_OBJECT_STORE_BUCKET: z.string().optional(),
     ARTIFACTS_OBJECT_STORE_BASE_URL: z.string().optional(),
@@ -1086,6 +1090,47 @@ const EnvironmentSchema = z
     COMMON_WORKER_REDIS_TLS_DISABLED: z.string().default(process.env.REDIS_TLS_DISABLED ?? "false"),
     COMMON_WORKER_REDIS_CLUSTER_MODE_ENABLED: z.string().default("0"),
 
+    TRIGGER_MOLLIFIER_ENABLED: z.string().default("0"),
+    // Separate switch for the drainer (consumer side) so it can be split
+    // off onto a dedicated worker service. Unset → inherits
+    // TRIGGER_MOLLIFIER_ENABLED, so single-container self-hosters don't have to
+    // flip two switches. In multi-replica deployments, set this to "0"
+    // explicitly on every replica except the one dedicated drainer
+    // service — otherwise every replica's polling loop races for the
+    // same buffer entries. `TRIGGER_MOLLIFIER_ENABLED` is still the master kill
+    // switch; setting this to "1" while `TRIGGER_MOLLIFIER_ENABLED` is "0" is a
+    // no-op because the gate-side singleton refuses to construct a
+    // buffer when the system is off.
+    TRIGGER_MOLLIFIER_DRAINER_ENABLED: z.string().default(process.env.TRIGGER_MOLLIFIER_ENABLED ?? "0"),
+    TRIGGER_MOLLIFIER_SHADOW_MODE: z.string().default("0"),
+    TRIGGER_MOLLIFIER_REDIS_HOST: z
+      .string()
+      .optional()
+      .transform((v) => v ?? process.env.REDIS_HOST),
+    TRIGGER_MOLLIFIER_REDIS_PORT: z.coerce
+      .number()
+      .optional()
+      .transform(
+        (v) => v ?? (process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT) : undefined),
+      ),
+    TRIGGER_MOLLIFIER_REDIS_USERNAME: z
+      .string()
+      .optional()
+      .transform((v) => v ?? process.env.REDIS_USERNAME),
+    TRIGGER_MOLLIFIER_REDIS_PASSWORD: z
+      .string()
+      .optional()
+      .transform((v) => v ?? process.env.REDIS_PASSWORD),
+    TRIGGER_MOLLIFIER_REDIS_TLS_DISABLED: z.string().default(process.env.REDIS_TLS_DISABLED ?? "false"),
+    TRIGGER_MOLLIFIER_TRIP_WINDOW_MS: z.coerce.number().int().positive().default(200),
+    TRIGGER_MOLLIFIER_TRIP_THRESHOLD: z.coerce.number().int().positive().default(100),
+    TRIGGER_MOLLIFIER_HOLD_MS: z.coerce.number().int().positive().default(500),
+    TRIGGER_MOLLIFIER_DRAIN_CONCURRENCY: z.coerce.number().int().positive().default(50),
+    TRIGGER_MOLLIFIER_ENTRY_TTL_S: z.coerce.number().int().positive().default(600),
+    TRIGGER_MOLLIFIER_DRAIN_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
+    TRIGGER_MOLLIFIER_DRAIN_SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+    TRIGGER_MOLLIFIER_DRAIN_MAX_ORGS_PER_TICK: z.coerce.number().int().positive().default(500),
+
     BATCH_TRIGGER_PROCESS_JOB_VISIBILITY_TIMEOUT_MS: z.coerce
       .number()
       .int()
@@ -1459,6 +1504,21 @@ const EnvironmentSchema = z
     EVENTS_CLICKHOUSE_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(10),
     EVENTS_CLICKHOUSE_LOG_LEVEL: z.enum(["log", "error", "warn", "info", "debug"]).default("info"),
     EVENTS_CLICKHOUSE_COMPRESSION_REQUEST: z.string().default("1"),
+    // ClickHouse client used by @internal/run-engine's PendingVersionSystem.
+    // Kept on its own URL + pool so this low-QPS path can't contend with
+    // the main analytics client (CLICKHOUSE_URL). Falls back to the main
+    // URL when unset so unconfigured environments still work.
+    RUN_ENGINE_CLICKHOUSE_URL: z
+      .string()
+      .optional()
+      .transform((v) => v ?? process.env.CLICKHOUSE_URL),
+    RUN_ENGINE_CLICKHOUSE_KEEP_ALIVE_ENABLED: z.string().default("1"),
+    RUN_ENGINE_CLICKHOUSE_KEEP_ALIVE_IDLE_SOCKET_TTL_MS: z.coerce.number().int().optional(),
+    RUN_ENGINE_CLICKHOUSE_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(5),
+    RUN_ENGINE_CLICKHOUSE_LOG_LEVEL: z
+      .enum(["log", "error", "warn", "info", "debug"])
+      .default("info"),
+    RUN_ENGINE_CLICKHOUSE_COMPRESSION_REQUEST: z.string().default("1"),
     EVENTS_CLICKHOUSE_BATCH_SIZE: z.coerce.number().int().default(1000),
     EVENTS_CLICKHOUSE_FLUSH_INTERVAL_MS: z.coerce.number().int().default(1000),
     METRICS_CLICKHOUSE_BATCH_SIZE: z.coerce.number().int().default(10000),
@@ -1480,9 +1540,18 @@ const EnvironmentSchema = z
     EVENTS_CLICKHOUSE_MAX_TRACE_DETAILED_SUMMARY_VIEW_COUNT: z.coerce.number().int().default(5_000),
     EVENTS_CLICKHOUSE_MAX_LIVE_RELOADING_SETTING: z.coerce.number().int().default(2000),
 
+    // Organization data stores registry
+    ORGANIZATION_DATA_STORES_RELOAD_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .default(60 * 1000), // 1 minute
+
     // LLM cost tracking
     LLM_COST_TRACKING_ENABLED: BoolEnv.default(true),
-    LLM_PRICING_RELOAD_INTERVAL_MS: z.coerce.number().int().default(5 * 60 * 1000), // 5 minutes
+    LLM_PRICING_RELOAD_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .default(5 * 60 * 1000), // 5 minutes
     LLM_PRICING_RELOAD_CHANNEL: z.string().default("llm-registry:reload"),
     LLM_PRICING_RELOAD_DEBOUNCE_MS: z.coerce.number().int().default(1000),
     // Whether to subscribe this process to the LLM_PRICING_RELOAD_CHANNEL.

@@ -51,6 +51,7 @@ import {
   v3RunsPath,
   v3SessionsPath,
 } from "~/utils/pathBuilder";
+import { throwNotFound } from "~/utils/httpErrors";
 
 const ParamsSchema = EnvironmentParamSchema.extend({
   sessionParam: z.string(),
@@ -71,7 +72,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
   const environment = await findEnvironmentBySlug(project.id, envParam, userId);
   if (!environment) {
-    throw new Error("Environment not found");
+    throwNotFound("Environment not found");
   }
 
   const presenter = new SessionPresenter($replica);
@@ -79,6 +80,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     userId,
     environmentId: environment.id,
     sessionParam,
+    projectExternalRef: project.externalRef,
+    environmentSlug: environment.slug,
   });
 
   if (!session) {

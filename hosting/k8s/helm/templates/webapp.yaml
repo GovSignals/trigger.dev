@@ -57,7 +57,7 @@ spec:
       annotations:
         kubectl.kubernetes.io/default-container: webapp
         {{- with .Values.webapp.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
         {{- end }}
       labels:
         {{- include "trigger-v4.componentSelectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" $component) | nindent 8 }}
@@ -436,16 +436,16 @@ spec:
               value: "1"
             {{- end }}
             {{- with .Values.webapp.extraEnvVars }}
-            {{- toYaml . | nindent 12 }}
+            {{- tpl (toYaml .) $ | nindent 12 }}
             {{- end }}
           volumeMounts:
             - name: shared
               mountPath: /home/node/shared
             {{- with .Values.webapp.extraVolumeMounts }}
-            {{- toYaml . | nindent 12 }}
+            {{- tpl (toYaml .) $ | nindent 12 }}
             {{- end }}
         {{- with .Values.webapp.extraContainers }}
-        {{- toYaml . | nindent 8 }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
         {{- end }}
       volumes:
         - name: shared
@@ -456,7 +456,7 @@ spec:
           emptyDir: {}
           {{- end }}
         {{- with .Values.webapp.extraVolumes }}
-        {{- toYaml . | nindent 8 }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
         {{- end }}
       {{- with .Values.webapp.nodeSelector }}
       nodeSelector:

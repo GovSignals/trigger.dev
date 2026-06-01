@@ -248,7 +248,11 @@ spec:
               mountPath: /home/node/shared
             {{- end }}
             {{- with .Values.supervisor.extraVolumeMounts }}
+            {{- if kindIs "string" . }}
+            {{- tpl . $ | nindent 12 }}
+            {{- else }}
             {{- tpl (toYaml .) $ | nindent 12 }}
+            {{- end }}
             {{- end }}
           {{- end }}
           {{- with .Values.supervisor.securityContext }}
@@ -267,7 +271,11 @@ spec:
           {{- end }}
         {{- end }}
         {{- with .Values.supervisor.extraVolumes }}
+        {{- if kindIs "string" . }}
+        {{- tpl . $ | nindent 8 }}
+        {{- else }}
         {{- tpl (toYaml .) $ | nindent 8 }}
+        {{- end }}
         {{- end }}
       {{- end }}
       {{- with .Values.supervisor.nodeSelector }}

@@ -89,6 +89,14 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.electric.resources | nindent 12 }}
+          {{- with .Values.electric.extraVolumeMounts }}
+          volumeMounts:
+            {{- tpl (toYaml .) $ | nindent 12 }}
+          {{- end }}
+      {{- with .Values.electric.extraVolumes }}
+      volumes:
+        {{- tpl (toYaml .) $ | nindent 8 }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

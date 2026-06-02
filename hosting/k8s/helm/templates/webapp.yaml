@@ -490,6 +490,10 @@ metadata:
   labels:
     {{- $component := "webapp" }}
     {{- include "trigger-v4.componentLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" $component) | nindent 4 }}
+  {{- with .Values.webapp.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.webapp.service.type }}
   ports:

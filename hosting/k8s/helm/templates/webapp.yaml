@@ -498,9 +498,9 @@ spec:
   type: {{ .Values.webapp.service.type }}
   ports:
     - port: {{ .Values.webapp.service.port }}
-      targetPort: http
+      targetPort: {{ .Values.webapp.service.targetPort | default "http" }}
       protocol: TCP
-      name: http
+      name: {{ .Values.webapp.service.name | default "http" }}
   selector:
     {{- include "trigger-v4.componentSelectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" $component) | nindent 4 }}
 ---

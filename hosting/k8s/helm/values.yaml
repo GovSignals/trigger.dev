@@ -577,6 +577,10 @@ electric:
     type: ClusterIP
     port: 3000
     targetPort: 3000
+    # Name of the Service port. Override when an external routing layer
+    # (e.g. a service-mesh ingress or platform LB) needs to address the
+    # port by a specific name instead of the chart default "http".
+    name: ""
     annotations: {}
   resources: {}
 

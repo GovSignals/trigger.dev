@@ -498,7 +498,7 @@ spec:
   type: {{ .Values.webapp.service.type }}
   ports:
     - port: {{ .Values.webapp.service.port }}
-      targetPort: {{ .Values.webapp.service.targetPort | default "http" }}
+      targetPort: {{ .Values.webapp.service.servicePortTargetPort | default .Values.webapp.service.targetPort | default "http" }}
       protocol: TCP
       name: {{ .Values.webapp.service.name | default "http" }}
   selector:

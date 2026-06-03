@@ -95,8 +95,23 @@ const Env = z
     KUBERNETES_WORKER_SERVICE_ACCOUNT: z.string().optional(), // Service account for worker pods
     KUBERNETES_WORKER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN: BoolEnv.default(false), // Whether to mount SA token
     // Extra annotations to apply to every worker pod (e.g. for service mesh
-    // sidecar injection, certificate injection, scheduling hints).
-    KUBERNETES_WORKER_POD_ANNOTATIONS: JsonObjectEnv("KUBERNETES_WORKER_POD_ANNOTATIONS"),
+    // sidecar injection, certificate injection, scheduling hints). K8s
+    // annotation values are always strings (`map[string]string` per the API
+    // spec) — and `kubernetes.ts` spreads this parsed object straight into
+    // the pod's `metadata.annotations` without any conversion. So each
+    // value here must be a string. The default validator on JsonObjectEnv
+    // is JsonStringMap (nested string→string map), which is the right
+    // shape for security contexts but the wrong shape for annotations:
+    // accepting nested objects here would silently pass zod validation
+    // and then get rejected by the K8s API with
+    //   "Pod in version v1 cannot be handled as a Pod: json: cannot
+    //    unmarshal object into Go struct field
+    //    ObjectMeta.metadata.annotations of type string"
+    // (Real failure mode hit on FedStart with
+    //  `{"com.palantir.rubix.service/pod-cert": {}}`.)
+    KUBERNETES_WORKER_POD_ANNOTATIONS: JsonObjectEnv("KUBERNETES_WORKER_POD_ANNOTATIONS", {
+      valueValidator: z.string(),
+    }),
     // Pod-level securityContext applied to every worker pod (V1PodSecurityContext shape).
     // Default is empty `{}`, preserving the upstream behavior of not setting
     // a pod-level securityContext. Provide a JSON object to enforce e.g.

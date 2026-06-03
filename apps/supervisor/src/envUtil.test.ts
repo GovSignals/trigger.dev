@@ -154,3 +154,65 @@ describe("JsonObjectEnv (arbitrary-value)", () => {
     expect(() => named.parse("{notjson")).toThrowError(/KUBERNETES_WORKER_POD_SECURITY_CONTEXT/);
   });
 });
+
+describe("JsonObjectEnv (flat string values, K8s-annotation shape)", () => {
+  // Regression test for a real production incident on FedStart: passing
+  // KUBERNETES_WORKER_POD_ANNOTATIONS with a nested-map value silently
+  // passed zod validation under the default JsonStringMap validator
+  // (because `{}` is a valid empty `Record<string,string>`), but then
+  // got spread directly into a K8s Pod's metadata.annotations and
+  // rejected by the apiserver:
+  //
+  //   "Pod in version v1 cannot be handled as a Pod: json: cannot
+  //    unmarshal object into Go struct field
+  //    ObjectMeta.metadata.annotations of type string"
+  //
+  // K8s annotations are flat `map[string]string` per the API spec, so
+  // KUBERNETES_WORKER_POD_ANNOTATIONS must validate values as `z.string()`,
+  // not as a nested string map.
+  const schema = JsonObjectEnv("KUBERNETES_WORKER_POD_ANNOTATIONS", {
+    valueValidator: z.string(),
+  });
+
+  it("accepts the Rubix pod-cert annotation as a string value", () => {
+    // Rubix's `com.palantir.rubix.service/pod-cert` annotation expects
+    // its VALUE to be the 2-char string "{}" (which Rubix internally
+    // parses as JSON to determine cert minting config). The env var
+    // input is itself JSON-stringified, so the value here is the
+    // 4-char string `"{}"` — two quotes around two braces.
+    expect(schema.parse('{"com.palantir.rubix.service/pod-cert":"{}"}')).toEqual({
+      "com.palantir.rubix.service/pod-cert": "{}",
+    });
+  });
+
+  it("accepts multiple flat string annotations", () => {
+    expect(
+      schema.parse(
+        '{"com.palantir.rubix.service/pod-cert":"{}","trigger.dev/owner":"supervisor"}'
+      )
+    ).toEqual({
+      "com.palantir.rubix.service/pod-cert": "{}",
+      "trigger.dev/owner": "supervisor",
+    });
+  });
+
+  it("rejects object values (annotations must be flat strings)", () => {
+    // The pre-fix bug: this would have passed zod with the default
+    // JsonStringMap validator, then crashed at K8s apiserver. Schema
+    // must reject before the value ever reaches K8s.
+    expect(() => schema.parse('{"com.palantir.rubix.service/pod-cert":{}}')).toThrowError(
+      /has invalid value/
+    );
+  });
+
+  it("rejects nested string maps as values", () => {
+    expect(() => schema.parse('{"some/annotation":{"nested":"value"}}')).toThrowError(
+      /has invalid value/
+    );
+  });
+
+  it("rejects numeric and boolean values", () => {
+    expect(() => schema.parse('{"some/annotation":42}')).toThrowError(/has invalid value/);
+    expect(() => schema.parse('{"some/annotation":true}')).toThrowError(/has invalid value/);
+  });
+});

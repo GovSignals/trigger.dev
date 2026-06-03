@@ -136,7 +136,12 @@ spec:
           env:
             # Core configuration
             - name: TRIGGER_API_URL
+              {{- if and .Values.nginx.enabled .Values.nginx.tls.enabled }}
+              # Use internal TLS service (bypasses oauth2-proxy, still encrypted)
+              value: "https://{{ include "trigger-v4.fullname" . }}-webapp-internal.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.nginx.internalPort | default 3031 }}"
+              {{- else }}
               value: "http://{{ include "trigger-v4.fullname" . }}-webapp:{{ .Values.webapp.service.port }}"
+              {{- end }}
             - name: TRIGGER_WORKER_TOKEN
               {{- if .Values.webapp.bootstrap.enabled }}
               valueFrom:
@@ -253,7 +258,11 @@ spec:
               value: {{ .Values.supervisor.config.debug | quote }}
             # OTEL
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              {{- if and .Values.nginx.enabled .Values.nginx.tls.enabled }}
+              value: "https://{{ include "trigger-v4.fullname" . }}-webapp-internal.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.nginx.internalPort | default 3031 }}/otel"
+              {{- else }}
               value: "http://{{ include "trigger-v4.fullname" . }}-webapp.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.webapp.service.port }}/otel"
+              {{- end }}
             {{- with .Values.supervisor.extraEnvVars }}
             {{- tpl (toYaml .) $ | nindent 12 }}
             {{- end }}

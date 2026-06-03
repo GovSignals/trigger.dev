@@ -914,6 +914,22 @@ registry:
       #     - registry.local
 
 # Shared persistent volumes
+# Optional nginx sidecar configuration. Default empty — chart consumers
+# that ship an in-pod nginx (e.g. for TLS termination + auth proxy) wire
+# this via extraContainers/extraVolumes; this block exists so other
+# templates can safely reference `.Values.nginx.*` with chart defaults.
+nginx:
+  # When true (and `nginx.tls.enabled: true`), templates like supervisor
+  # route to `<fullname>-webapp-internal:<nginx.internalPort>` over TLS
+  # instead of the public webapp Service. The chart consumer is
+  # responsible for actually rendering the in-pod sidecar + the
+  # `<fullname>-webapp-internal` Service (see `extraContainers` /
+  # `extraVolumes` on `webapp`).
+  enabled: false
+  tls:
+    enabled: false
+  internalPort: 3031
+
 persistence:
   # This is used for the worker token file
   shared:

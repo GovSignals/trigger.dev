@@ -501,6 +501,9 @@ spec:
       targetPort: {{ .Values.webapp.service.servicePortTargetPort | default .Values.webapp.service.targetPort | default "http" }}
       protocol: TCP
       name: {{ .Values.webapp.service.name | default "http" }}
+    {{- with .Values.webapp.service.extraPorts }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   selector:
     {{- include "trigger-v4.componentSelectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" $component) | nindent 4 }}
 ---

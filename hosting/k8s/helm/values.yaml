@@ -75,6 +75,11 @@ webapp:
     type: ClusterIP
     port: 3030
     targetPort: 3000
+    # Extra Service ports merged into the webapp Service. Use to expose an
+    # in-cluster-only port (e.g. the embedded s2-lite :8080 for realtime
+    # streams) on the existing Service without a separate Service or TLS.
+    # Each entry must be named (k8s requires names once a Service has >1 port).
+    extraPorts: []
 
   podAnnotations: {}
 

@@ -1,10 +1,11 @@
-import { CreateBackgroundWorkerRequestBody, logger, tryCatch } from "@trigger.dev/core/v3";
+import type { CreateBackgroundWorkerRequestBody } from "@trigger.dev/core/v3";
+import { logger, tryCatch } from "@trigger.dev/core/v3";
 import type {
   BackgroundWorker,
   PrismaClientOrTransaction,
   WorkerDeployment,
 } from "@trigger.dev/database";
-import { AuthenticatedEnvironment } from "~/services/apiAuth.server";
+import type { AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import { type TaskMetadataCache } from "~/services/taskMetadataCache.server";
 import { taskMetadataCacheInstance } from "~/services/taskMetadataCacheInstance.server";
 import { BaseService, ServiceValidationError } from "./baseService.server";
@@ -15,6 +16,7 @@ import {
 } from "./createBackgroundWorker.server";
 import { findOrCreateBackgroundWorker } from "./createDeploymentBackgroundWorkerV4/findOrCreateBackgroundWorker.server";
 import { TimeoutDeploymentService } from "./timeoutDeployment.server";
+import { recordDeploymentOutcome } from "./recordDeploymentOutcome.server";
 import { env } from "~/env.server";
 
 export class CreateDeploymentBackgroundWorkerServiceV4 extends BaseService {
@@ -111,7 +113,7 @@ export class CreateDeploymentBackgroundWorkerServiceV4 extends BaseService {
         if (findOrCreateError instanceof ServiceValidationError) {
           // `#failBackgroundWorkerDeployment` already throws its argument; the
           // outer `throw` covers the non-SVE branch.
-          await this.#failBackgroundWorkerDeployment(deployment, findOrCreateError);
+          await this.#failBackgroundWorkerDeployment(deployment, findOrCreateError, environment);
         }
         throw findOrCreateError;
       }
@@ -144,7 +146,7 @@ export class CreateDeploymentBackgroundWorkerServiceV4 extends BaseService {
 
         const serviceError = new ServiceValidationError("Error creating background worker files");
 
-        await this.#failBackgroundWorkerDeployment(deployment, serviceError);
+        await this.#failBackgroundWorkerDeployment(deployment, serviceError, environment);
 
         throw serviceError;
       }
@@ -167,7 +169,7 @@ export class CreateDeploymentBackgroundWorkerServiceV4 extends BaseService {
             error: resourcesError.message,
           });
 
-          await this.#failBackgroundWorkerDeployment(deployment, resourcesError);
+          await this.#failBackgroundWorkerDeployment(deployment, resourcesError, environment);
           throw resourcesError;
         }
 
@@ -179,7 +181,7 @@ export class CreateDeploymentBackgroundWorkerServiceV4 extends BaseService {
           "Error creating background worker resources"
         );
 
-        await this.#failBackgroundWorkerDeployment(deployment, serviceError);
+        await this.#failBackgroundWorkerDeployment(deployment, serviceError, environment);
 
         throw serviceError;
       }
@@ -206,7 +208,7 @@ export class CreateDeploymentBackgroundWorkerServiceV4 extends BaseService {
             error: schedulesError.message,
           });
 
-          await this.#failBackgroundWorkerDeployment(deployment, schedulesError);
+          await this.#failBackgroundWorkerDeployment(deployment, schedulesError, environment);
           throw schedulesError;
         }
 
@@ -220,7 +222,7 @@ export class CreateDeploymentBackgroundWorkerServiceV4 extends BaseService {
 
         const serviceError = new ServiceValidationError("Error syncing declarative schedules");
 
-        await this.#failBackgroundWorkerDeployment(deployment, serviceError);
+        await this.#failBackgroundWorkerDeployment(deployment, serviceError, environment);
 
         throw serviceError;
       }
@@ -264,7 +266,11 @@ export class CreateDeploymentBackgroundWorkerServiceV4 extends BaseService {
     });
   }
 
-  async #failBackgroundWorkerDeployment(deployment: WorkerDeployment, error: Error) {
+  async #failBackgroundWorkerDeployment(
+    deployment: WorkerDeployment,
+    error: Error,
+    environment: AuthenticatedEnvironment
+  ) {
     // Guarded BUILDING → FAILED transition, symmetric with the BUILDING → DEPLOYING
     // transition in `call()`. With idempotent retries, two attempts can run side-by-side;
     // without the predicate, one attempt's failure could downgrade the deployment after
@@ -297,6 +303,16 @@ export class CreateDeploymentBackgroundWorkerServiceV4 extends BaseService {
       // sibling attempt may have just enqueued it as part of a successful
       // BUILDING → DEPLOYING transition.
       await TimeoutDeploymentService.dequeue(deployment.id, this._prisma);
+
+      recordDeploymentOutcome({
+        status: "FAILED",
+        deploymentFriendlyId: deployment.friendlyId,
+        organizationId: environment.organizationId,
+        projectId: environment.projectId,
+        environmentId: environment.id,
+        environmentType: environment.type,
+        reason: error.message,
+      });
     }
 
     throw error;

@@ -1,11 +1,13 @@
-import { LoaderFunctionArgs } from "@remix-run/server-runtime";
-import { MachinePresetName, prettyPrintPacket, TaskRunError } from "@trigger.dev/core/v3";
-import { typedjson, UseDataFunctionReturn } from "remix-typedjson";
+import type { LoaderFunctionArgs } from "@remix-run/server-runtime";
+import { prettyPrintPacket, TaskRunError } from "@trigger.dev/core/v3";
+import type { UseDataFunctionReturn } from "remix-typedjson";
+import { typedjson } from "remix-typedjson";
 import { RUNNING_STATUSES } from "~/components/runs/v3/TaskRunStatus";
 import { $replica } from "~/db.server";
 import { requireUserId } from "~/services/session.server";
 import { v3RunParamsSchema } from "~/utils/pathBuilder";
-import { machinePresetFromName, machinePresetFromRun } from "~/v3/machinePresets.server";
+import { machinePresetFromRun } from "~/v3/machinePresets.server";
+import { runStore } from "~/v3/runStore.server";
 import { FINAL_ATTEMPT_STATUSES, isFinalRunStatus } from "~/v3/taskStatus";
 
 export type RunInspectorData = UseDataFunctionReturn<typeof loader>;
@@ -14,92 +16,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const userId = await requireUserId(request);
   const parsedParams = v3RunParamsSchema.pick({ runParam: true }).parse(params);
 
-  const run = await $replica.taskRun.findFirst({
-    select: {
-      id: true,
-      traceId: true,
-      //metadata
-      number: true,
-      taskIdentifier: true,
-      friendlyId: true,
-      isTest: true,
-      runTags: true,
-      machinePreset: true,
-      lockedToVersion: {
-        select: {
-          version: true,
-          sdkVersion: true,
-        },
-      },
-      //status + duration
-      status: true,
-      startedAt: true,
-      createdAt: true,
-      updatedAt: true,
-      queuedAt: true,
-      completedAt: true,
-      logsDeletedAt: true,
-      //idempotency
-      idempotencyKey: true,
-      //delayed
-      delayUntil: true,
-      //ttl
-      ttl: true,
-      expiredAt: true,
-      //queue
-      queue: true,
-      concurrencyKey: true,
-      //schedule
-      scheduleId: true,
-      //usage
-      baseCostInCents: true,
-      costInCents: true,
-      usageDurationMs: true,
-      //env
-      runtimeEnvironment: {
-        select: { id: true, slug: true, type: true },
-      },
-      payload: true,
-      payloadType: true,
-      metadata: true,
-      metadataType: true,
-      maxAttempts: true,
-      project: {
-        include: {
-          organization: true,
-        },
-      },
-      lockedBy: {
-        select: {
-          filePath: true,
-          worker: {
-            select: {
-              deployment: {
-                select: {
-                  friendlyId: true,
-                  shortCode: true,
-                  version: true,
-                  runtime: true,
-                  runtimeVersion: true,
-                  git: true,
-                },
-              },
-            },
-          },
-        },
-      },
-      parentTaskRun: {
-        select: {
-          friendlyId: true,
-        },
-      },
-      rootTaskRun: {
-        select: {
-          friendlyId: true,
-        },
-      },
-    },
-    where: {
+  const run = await runStore.findRun(
+    {
       friendlyId: parsedParams.runParam,
       project: {
         organization: {
@@ -111,7 +29,94 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         },
       },
     },
-  });
+    {
+      select: {
+        id: true,
+        traceId: true,
+        //metadata
+        number: true,
+        taskIdentifier: true,
+        friendlyId: true,
+        isTest: true,
+        runTags: true,
+        machinePreset: true,
+        lockedToVersion: {
+          select: {
+            version: true,
+            sdkVersion: true,
+          },
+        },
+        //status + duration
+        status: true,
+        startedAt: true,
+        createdAt: true,
+        updatedAt: true,
+        queuedAt: true,
+        completedAt: true,
+        logsDeletedAt: true,
+        //idempotency
+        idempotencyKey: true,
+        //delayed
+        delayUntil: true,
+        //ttl
+        ttl: true,
+        expiredAt: true,
+        //queue
+        queue: true,
+        concurrencyKey: true,
+        //schedule
+        scheduleId: true,
+        //usage
+        baseCostInCents: true,
+        costInCents: true,
+        usageDurationMs: true,
+        //env
+        runtimeEnvironment: {
+          select: { id: true, slug: true, type: true },
+        },
+        payload: true,
+        payloadType: true,
+        metadata: true,
+        metadataType: true,
+        maxAttempts: true,
+        project: {
+          include: {
+            organization: true,
+          },
+        },
+        lockedBy: {
+          select: {
+            filePath: true,
+            worker: {
+              select: {
+                deployment: {
+                  select: {
+                    friendlyId: true,
+                    shortCode: true,
+                    version: true,
+                    runtime: true,
+                    runtimeVersion: true,
+                    git: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+        parentTaskRun: {
+          select: {
+            friendlyId: true,
+          },
+        },
+        rootTaskRun: {
+          select: {
+            friendlyId: true,
+          },
+        },
+      },
+    },
+    $replica
+  );
 
   if (!run) {
     throw new Response("Not found", { status: 404 });
@@ -140,17 +145,17 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     finishedAttempt === null
       ? undefined
       : finishedAttempt.outputType === "application/store"
-      ? `/resources/packets/${run.runtimeEnvironment.id}/${finishedAttempt.output}`
-      : typeof finishedAttempt.output !== "undefined" && finishedAttempt.output !== null
-      ? await prettyPrintPacket(finishedAttempt.output, finishedAttempt.outputType ?? undefined)
-      : undefined;
+        ? `/resources/packets/${run.runtimeEnvironment.id}/${finishedAttempt.output}`
+        : typeof finishedAttempt.output !== "undefined" && finishedAttempt.output !== null
+          ? await prettyPrintPacket(finishedAttempt.output, finishedAttempt.outputType ?? undefined)
+          : undefined;
 
   const payload =
     run.payloadType === "application/store"
       ? `/resources/packets/${run.runtimeEnvironment.id}/${run.payload}`
       : typeof run.payload !== "undefined" && run.payload !== null
-      ? await prettyPrintPacket(run.payload, run.payloadType ?? undefined)
-      : undefined;
+        ? await prettyPrintPacket(run.payload, run.payloadType ?? undefined)
+        : undefined;
 
   let error: TaskRunError | undefined = undefined;
   if (finishedAttempt?.error) {

@@ -17,8 +17,10 @@ import { Label } from "~/components/primitives/Label";
 import { Select, SelectItem } from "~/components/primitives/Select";
 import { ButtonSpinner } from "~/components/primitives/Spinner";
 import { prisma } from "~/db.server";
+import { authenticator } from "~/services/auth.server";
 import { logger } from "~/services/logger.server";
 import { requireUserId } from "~/services/session.server";
+import { ssoRedirectForEmail } from "~/services/ssoAutoDiscovery.server";
 import { confirmBasicDetailsPath, newProjectPath } from "~/utils/pathBuilder";
 import { redirectWithErrorMessage } from "~/models/message.server";
 import { generateVercelOAuthState } from "~/v3/vercel/vercelOAuthState.server";
@@ -149,11 +151,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         organizationId: params.data.organizationId,
         userId,
       });
-      throw redirectWithErrorMessage(
-        "/",
-        request,
-        "Organization not found. Please try again."
-      );
+      throw redirectWithErrorMessage("/", request, "Organization not found. Please try again.");
     }
 
     return typedjson({
@@ -190,6 +188,44 @@ export async function action({ request }: ActionFunctionArgs) {
 
   if (!submission.success) {
     return json({ error: "Invalid submission" }, { status: 400 });
+  }
+
+  // SSO auto-discovery: if the signed-in user's domain requires SSO, the
+  // current session was established via a non-SSO method — block the
+  // onboarding action and route them through the SSO flow instead.
+  const sessionUser = await prisma.user.findFirst({
+    where: { id: userId },
+    select: { email: true },
+  });
+  if (sessionUser?.email) {
+    // Preserve the in-progress Vercel install across the SSO handoff:
+    // rebuild the onboarding URL (same shape the org-step redirect below
+    // uses) and pass it as `redirectTo` so the single-use `code`,
+    // `configurationId`, and `next` aren't lost when the user is bounced
+    // to their identity provider.
+    const resumeParams = new URLSearchParams();
+    resumeParams.set("code", submission.data.code);
+    if (submission.data.configurationId) {
+      resumeParams.set("configurationId", submission.data.configurationId);
+    }
+    if (submission.data.next) {
+      resumeParams.set("next", submission.data.next);
+    }
+    const resumeUrl = `/vercel/onboarding?${resumeParams.toString()}`;
+    const ssoRedirect = await ssoRedirectForEmail(sessionUser.email, "oauth_blocked", resumeUrl);
+    if (ssoRedirect) {
+      // The user is already authenticated via a non-SSO method, so a plain
+      // redirect to `/login/sso` would be bounced straight home by that
+      // route's already-authenticated guard — silently dropping the install.
+      // Destroy the current session first (mirroring the OAuth callbacks,
+      // which never commit a session when SSO is required) so `/login/sso`
+      // accepts them. `authenticator.logout` redirects to `ssoRedirect`
+      // verbatim — unlike the `/logout` route it doesn't run the redirect
+      // sanitizer, which would otherwise reject the non-navigable
+      // `/login/sso` target. The resume URL rides along as `redirectTo` and
+      // survives the SSO round-trip.
+      return authenticator.logout(request, { redirectTo: ssoRedirect });
+    }
   }
 
   const { code, configurationId, next } = submission.data;
@@ -293,13 +329,12 @@ export default function VercelOnboardingPage() {
     return (
       <AppContainer className="bg-charcoal-900">
         <BackgroundWrapper>
-          <MainCenteredContainer variant="onboarding" className="max-w-[26rem] rounded-lg border border-grid-bright bg-background-dimmed p-5 shadow-lg">
+          <MainCenteredContainer
+            variant="onboarding"
+            className="max-w-[26rem] rounded-lg border border-grid-bright bg-background-dimmed p-5 shadow-lg"
+          >
             <FormTitle title="Installation Expired" description={data.error} />
-            <Button
-              variant="primary/medium"
-              onClick={() => window.close()}
-              className="w-full"
-            >
+            <Button variant="primary/medium" onClick={() => window.close()} className="w-full">
               Close
             </Button>
           </MainCenteredContainer>
@@ -325,7 +360,10 @@ export default function VercelOnboardingPage() {
     return (
       <AppContainer className="bg-charcoal-900">
         <BackgroundWrapper>
-          <MainCenteredContainer variant="onboarding" className="max-w-[26rem] rounded-lg border border-grid-bright bg-background-dimmed p-5 shadow-lg">
+          <MainCenteredContainer
+            variant="onboarding"
+            className="max-w-[26rem] rounded-lg border border-grid-bright bg-background-dimmed p-5 shadow-lg"
+          >
             <FormTitle
               LeadingIcon={<BuildingOfficeIcon className="size-7 text-indigo-500" />}
               title="Select Organization"
@@ -351,7 +389,8 @@ export default function VercelOnboardingPage() {
                     defaultValue={data.organizations[0]?.id}
                     text={(v) =>
                       typeof v === "string"
-                        ? data.organizations.find((o) => o.id === v)?.title || "Choose an organization"
+                        ? data.organizations.find((o) => o.id === v)?.title ||
+                          "Choose an organization"
                         : "Choose an organization"
                     }
                   >
@@ -401,7 +440,10 @@ export default function VercelOnboardingPage() {
   return (
     <AppContainer className="bg-charcoal-900">
       <BackgroundWrapper>
-        <MainCenteredContainer variant="onboarding" className="max-w-[26rem] rounded-lg border border-grid-bright bg-background-dimmed p-5 shadow-lg">
+        <MainCenteredContainer
+          variant="onboarding"
+          className="max-w-[26rem] rounded-lg border border-grid-bright bg-background-dimmed p-5 shadow-lg"
+        >
           <FormTitle
             LeadingIcon={<FolderIcon className="size-7 text-indigo-500" />}
             title="Select Project"
@@ -428,7 +470,8 @@ export default function VercelOnboardingPage() {
                   defaultValue={data.organization.projects[0]?.id}
                   text={(v) =>
                     typeof v === "string"
-                      ? data.organization.projects.find((p) => p.id === v)?.name || "Choose a project"
+                      ? data.organization.projects.find((p) => p.id === v)?.name ||
+                        "Choose a project"
                       : "Choose a project"
                   }
                 >

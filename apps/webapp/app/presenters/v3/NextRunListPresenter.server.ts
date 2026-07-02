@@ -1,5 +1,5 @@
 import { type ClickHouse } from "@internal/clickhouse";
-import { MachinePresetName } from "@trigger.dev/core/v3";
+import type { MachinePresetName } from "@trigger.dev/core/v3";
 import { RunAnnotations } from "@trigger.dev/core/v3/schemas";
 import {
   type PrismaClient,
@@ -11,8 +11,9 @@ import { timeFilters } from "~/components/runs/v3/SharedFilters";
 import { findDisplayableEnvironment } from "~/models/runtimeEnvironment.server";
 import { getTaskIdentifiers } from "~/models/task.server";
 import { RunsRepository } from "~/services/runsRepository/runsRepository.server";
-import { baseWorkerQueue } from "~/runEngine/concerns/workerQueueSplit.server";
+import { regionForDisplay } from "~/runEngine/concerns/workerQueueSplit.server";
 import { machinePresetFromRun } from "~/v3/machinePresets.server";
+import { runStore } from "~/v3/runStore.server";
 import { ServiceValidationError } from "~/v3/services/baseService.server";
 import { isCancellableRunStatus, isFinalRunStatus, isPendingRunStatus } from "~/v3/taskStatus";
 
@@ -206,11 +207,12 @@ export class NextRunListPresenter {
     let hasAnyRuns = runs.length > 0;
 
     if (!hasAnyRuns) {
-      const firstRun = await this.replica.taskRun.findFirst({
-        where: {
+      const firstRun = await runStore.findRun(
+        {
           runtimeEnvironmentId: environmentId,
         },
-      });
+        this.replica
+      );
 
       if (firstRun) {
         hasAnyRuns = true;
@@ -233,7 +235,7 @@ export class NextRunListPresenter {
           delayUntil: run.delayUntil ? run.delayUntil.toISOString() : undefined,
           hasFinished,
           finishedAt: hasFinished
-            ? run.completedAt?.toISOString() ?? run.updatedAt.toISOString()
+            ? (run.completedAt?.toISOString() ?? run.updatedAt.toISOString())
             : undefined,
           isTest: run.isTest,
           status: run.status,
@@ -260,7 +262,7 @@ export class NextRunListPresenter {
             name: run.queue.replace("task/", ""),
             type: run.queue.startsWith("task/") ? "task" : "custom",
           },
-          region: run.workerQueue ? baseWorkerQueue(run.workerQueue) : undefined,
+          region: regionForDisplay(run.region, run.workerQueue),
           taskKind: RunAnnotations.safeParse(run.annotations).data?.taskKind ?? "STANDARD",
         };
       }),

@@ -1,9 +1,10 @@
 import type { AuthenticatedEnvironment } from "@internal/run-engine";
 import type { Prisma, PrismaClientOrTransaction, RuntimeEnvironment } from "@trigger.dev/database";
 import { $replica, prisma } from "~/db.server";
+import { runStore } from "~/v3/runStore.server";
 import { logger } from "~/services/logger.server";
 import { getUsername } from "~/utils/username";
-import { sanitizeBranchName } from "@trigger.dev/core/v3/utils/gitBranch";
+import { isDefaultDevBranch, sanitizeBranchName } from "@trigger.dev/core/v3/utils/gitBranch";
 
 export type { RuntimeEnvironment };
 
@@ -38,7 +39,7 @@ type PrismaEnvWithAuthAndParent = Prisma.RuntimeEnvironmentGetPayload<{
 // plain number (lossless at this scale). The optional union accepts both
 // query shapes — with parentEnvironment loaded, or without it.
 export function toAuthenticated(
-  env: PrismaEnvWithAuth | PrismaEnvWithAuthAndParent,
+  env: PrismaEnvWithAuth | PrismaEnvWithAuthAndParent
 ): AuthenticatedEnvironment {
   return {
     id: env.id,
@@ -93,21 +94,24 @@ export function toAuthenticated(
 
 export async function findEnvironmentByApiKey(
   apiKey: string,
-  branchName: string | undefined
+  branchName: string | undefined,
+  tx: PrismaClientOrTransaction = $replica
 ): Promise<AuthenticatedEnvironment | null> {
+  const branch = sanitizeBranchName(branchName) ?? undefined;
+
   const include = {
     ...authIncludeBase,
-    childEnvironments: branchName
+    childEnvironments: branch
       ? {
           where: {
-            branchName: sanitizeBranchName(branchName),
+            branchName: branch,
             archivedAt: null,
           },
         }
       : undefined,
   } satisfies Prisma.RuntimeEnvironmentInclude;
 
-  let environment = await $replica.runtimeEnvironment.findFirst({
+  let environment = await tx.runtimeEnvironment.findFirst({
     where: {
       apiKey,
     },
@@ -116,7 +120,7 @@ export async function findEnvironmentByApiKey(
 
   // Fall back to keys that were revoked within the grace window
   if (!environment) {
-    const revokedApiKey = await $replica.revokedApiKey.findFirst({
+    const revokedApiKey = await tx.revokedApiKey.findFirst({
       where: {
         apiKey,
         expiresAt: { gt: new Date() },
@@ -139,13 +143,31 @@ export async function findEnvironmentByApiKey(
   }
 
   if (environment.type === "PREVIEW") {
-    if (!branchName) {
+    if (!branch) {
       logger.warn("findEnvironmentByApiKey(): Preview env with no branch name provided", {
         environmentId: environment.id,
       });
       return null;
     }
 
+    const childEnvironment = environment.childEnvironments.at(0);
+
+    if (childEnvironment) {
+      return toAuthenticated({
+        ...childEnvironment,
+        apiKey: environment.apiKey,
+        orgMember: environment.orgMember,
+        organization: environment.organization,
+        project: environment.project,
+      });
+    }
+
+    //A branch was specified but no child environment was found
+    return null;
+  }
+
+  // If there is a named DEV branch (other than default), return it
+  if (environment.type === "DEVELOPMENT" && branch !== undefined && !isDefaultDevBranch(branch)) {
     const childEnvironment = environment.childEnvironments.at(0);
 
     if (childEnvironment) {
@@ -251,14 +273,17 @@ export async function findEnvironmentFromRun(
 ): Promise<EnvironmentFromRun | null> {
   // The include (no select) already pulls every taskRun scalar, so runTags/batchId
   // ride along for free — no extra query for the realtime publish to send a full record.
-  const taskRun = await (tx ?? $replica).taskRun.findFirst({
-    where: {
+  const taskRun = await runStore.findRun(
+    {
       id: runId,
     },
-    include: {
-      runtimeEnvironment: { include: authIncludeBase },
+    {
+      include: {
+        runtimeEnvironment: { include: authIncludeBase },
+      },
     },
-  });
+    tx ?? $replica
+  );
   if (!taskRun?.runtimeEnvironment) {
     return null;
   }

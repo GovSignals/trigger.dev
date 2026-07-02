@@ -1,47 +1,44 @@
 import {
-  AdjustmentsHorizontalIcon,
-  ArrowPathRoundedSquareIcon,
-  ArrowRightOnRectangleIcon,
-  ArrowsRightLeftIcon,
   ArrowTopRightOnSquareIcon,
-  BeakerIcon,
-  BellAlertIcon,
-  ChartBarIcon,
   ChevronRightIcon,
-  ClockIcon,
-  Cog8ToothIcon,
-  CogIcon,
-  CpuChipIcon,
-  CubeIcon,
   ExclamationTriangleIcon,
-  FolderIcon,
-  FolderOpenIcon,
-  GlobeAmericasIcon,
-  IdentificationIcon,
-  KeyIcon,
   PencilSquareIcon,
-  PlusIcon,
-  PuzzlePieceIcon,
-  RectangleStackIcon,
-  ServerStackIcon,
-  Squares2X2Icon,
-  TableCellsIcon,
-  UsersIcon,
-} from "@heroicons/react/20/solid";
+} from "@heroicons/react/24/outline";
 import { Link, useFetcher, useNavigation } from "@remix-run/react";
-import { IconBugFilled } from "@tabler/icons-react";
 import { LayoutGroup, motion } from "framer-motion";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import simplur from "simplur";
-import { AIMetricsIcon } from "~/assets/icons/AIMetricsIcon";
-import { AIPromptsIcon } from "~/assets/icons/AIPromptsIcon";
+import { AIChatIcon } from "~/assets/icons/AIChatIcon";
+import { AIPenIcon } from "~/assets/icons/AIPenIcon";
+import { ArrowLeftRightIcon } from "~/assets/icons/ArrowLeftRightIcon";
+import { ArrowRightSquareIcon } from "~/assets/icons/ArrowRightSquareIcon";
+import { AvatarCircleIcon } from "~/assets/icons/AvatarCircleIcon";
+import { BatchesIcon } from "~/assets/icons/BatchesIcon";
+import { BellIcon } from "~/assets/icons/BellIcon";
+import { Box3DIcon } from "~/assets/icons/Box3DIcon";
+import { BugIcon } from "~/assets/icons/BugIcon";
+import { ChartBarIcon } from "~/assets/icons/ChartBarIcon";
+import { CodeSquareIcon } from "~/assets/icons/CodeSquareIcon";
 import { ConcurrencyIcon } from "~/assets/icons/ConcurrencyIcon";
+import { DeploymentsIcon } from "~/assets/icons/DeploymentsIcon";
+import { DialIcon } from "~/assets/icons/DialIcon";
 import { DropdownIcon } from "~/assets/icons/DropdownIcon";
 import { BranchEnvironmentIconSmall } from "~/assets/icons/EnvironmentIcons";
+import { FolderClosedIcon } from "~/assets/icons/FolderClosedIcon";
+import { FolderOpenIcon } from "~/assets/icons/FolderOpenIcon";
+import { GlobeLinesIcon } from "~/assets/icons/GlobeLinesIcon";
+import { HomeIcon } from "~/assets/icons/HomeIcon";
+import { IDIcon } from "~/assets/icons/IDIcon";
+import { IntegrationsIcon } from "~/assets/icons/IntegrationsIcon";
+import { KeyIcon } from "~/assets/icons/KeyIcon";
 import { ListCheckedIcon } from "~/assets/icons/ListCheckedIcon";
 import { LogsIcon } from "~/assets/icons/LogsIcon";
-import { RunsIconExtraSmall } from "~/assets/icons/RunsIcon";
-import { TaskIconSmall } from "~/assets/icons/TaskIcon";
+import { PlusIcon } from "~/assets/icons/PlusIcon";
+import { QueuesIcon } from "~/assets/icons/QueuesIcon";
+import { RunsIcon } from "~/assets/icons/RunsIcon";
+import { SlidersIcon } from "~/assets/icons/SlidersIcon";
+import { TasksIcon } from "~/assets/icons/TasksIcon";
+import { UsageIcon } from "~/assets/icons/UsageIcon";
 import { WaitpointTokenIcon } from "~/assets/icons/WaitpointTokenIcon";
 import { Avatar } from "~/components/primitives/Avatar";
 import { type MatchedEnvironment } from "~/hooks/useEnvironment";
@@ -55,7 +52,6 @@ import { type UserWithDashboardPreferences } from "~/models/user.server";
 import { useCurrentPlan } from "~/routes/_app.orgs.$organizationSlug/route";
 import { type FeedbackType } from "~/routes/resources.feedback";
 import { IncidentStatusPanel, useIncidentStatus } from "~/routes/resources.incidents";
-import { NotificationPanel } from "./NotificationPanel";
 import { cn } from "~/utils/cn";
 import {
   accountPath,
@@ -71,36 +67,32 @@ import {
   organizationTeamPath,
   queryPath,
   regionsPath,
-  v3AgentsPath,
   v3ApiKeysPath,
-  v3PlaygroundPath,
   v3BatchesPath,
   v3BillingPath,
-  v3BuiltInDashboardPath,
   v3BulkActionsPath,
+  v3DashboardsLandingPath,
   v3DeploymentsPath,
   v3EnvironmentPath,
   v3EnvironmentVariablesPath,
   v3ErrorsPath,
   v3LogsPath,
-  v3PromptsPath,
   v3ModelsPath,
   v3ProjectAlertsPath,
   v3ProjectPath,
   v3ProjectSettingsGeneralPath,
   v3ProjectSettingsIntegrationsPath,
+  v3PromptsPath,
   v3QueuesPath,
   v3RunsPath,
-  v3SchedulesPath,
   v3SessionsPath,
-  v3TestPath,
   v3UsagePath,
   v3WaitpointTokensPath,
 } from "~/utils/pathBuilder";
-import { AlphaBadge } from "../AlphaBadge";
 import { AskAI } from "../AskAI";
 import { FreePlanUsage } from "../billing/FreePlanUsage";
 import { ConnectionIcon, DevPresencePanel, useDevPresence } from "../DevPresence";
+import { AlphaBadge, NewBadge } from "../FeatureBadges";
 import { ImpersonationBanner } from "../ImpersonationBanner";
 import { Button, ButtonContent, LinkButton } from "../primitives/Buttons";
 import { Dialog, DialogTrigger } from "../primitives/Dialog";
@@ -116,11 +108,11 @@ import {
   TooltipTrigger,
 } from "../primitives/Tooltip";
 import { ShortcutsAutoOpen } from "../Shortcuts";
-import { UserProfilePhoto } from "../UserProfilePhoto";
 import { CreateDashboardButton } from "./DashboardDialogs";
 import { DashboardList } from "./DashboardList";
 import { EnvironmentSelector } from "./EnvironmentSelector";
 import { HelpAndFeedback } from "./HelpAndFeedbackPopover";
+import { NotificationPanel } from "./NotificationPanel";
 import { SideMenuHeader } from "./SideMenuHeader";
 import { SideMenuItem } from "./SideMenuItem";
 import { SideMenuSection } from "./SideMenuSection";
@@ -319,7 +311,9 @@ export function SideMenu({
                     <LinkButton
                       variant="minimal/medium"
                       to={adminPath()}
-                      TrailingIcon={UsersIcon}
+                      TrailingIcon={HomeIcon}
+                      trailingIconClassName="h-4.5 w-4.5"
+                      className="h-8 w-8"
                     />
                   </TooltipTrigger>
                   <TooltipContent side="bottom" className={"text-xs"}>
@@ -376,10 +370,10 @@ export function SideMenu({
                           </TooltipTrigger>
                           <TooltipContent side="right" className={"text-xs"}>
                             {isConnected === undefined
-                              ? "Checking connection..."
+                              ? "Checking connection…"
                               : isConnected
-                              ? "Your dev server is connected"
-                              : "Your dev server is not connected"}
+                                ? "Your dev server is connected"
+                                : "Your dev server is not connected"}
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
@@ -390,76 +384,33 @@ export function SideMenu({
               </div>
             </div>
 
-            <div className="w-full">
+            <div className="w-full space-y-0">
               <SideMenuItem
                 name="Tasks"
-                icon={TaskIconSmall}
+                icon={TasksIcon}
                 activeIconColor="text-tasks"
-                inactiveIconColor="text-tasks"
+                inactiveIconColor="text-text-dimmed"
                 to={v3EnvironmentPath(organization, project, environment)}
                 data-action="tasks"
                 isCollapsed={isCollapsed}
               />
               <SideMenuItem
                 name="Runs"
-                icon={RunsIconExtraSmall}
+                icon={RunsIcon}
                 activeIconColor="text-runs"
-                inactiveIconColor="text-runs"
+                inactiveIconColor="text-text-dimmed"
                 to={v3RunsPath(organization, project, environment)}
+                data-action="runs"
                 isCollapsed={isCollapsed}
               />
               <SideMenuItem
-                name="Batches"
-                icon={Squares2X2Icon}
-                activeIconColor="text-batches"
-                inactiveIconColor="text-batches"
-                to={v3BatchesPath(organization, project, environment)}
-                data-action="batches"
-                isCollapsed={isCollapsed}
-              />
-              <SideMenuItem
-                name="Schedules"
-                icon={ClockIcon}
-                activeIconColor="text-schedules"
-                inactiveIconColor="text-schedules"
-                to={v3SchedulesPath(organization, project, environment)}
-                data-action="schedules"
-                isCollapsed={isCollapsed}
-              />
-              <SideMenuItem
-                name="Queues"
-                icon={RectangleStackIcon}
-                activeIconColor="text-queues"
-                inactiveIconColor="text-queues"
-                to={v3QueuesPath(organization, project, environment)}
-                data-action="queues"
-                isCollapsed={isCollapsed}
-              />
-              <SideMenuItem
-                name="Waitpoint tokens"
-                icon={WaitpointTokenIcon}
-                activeIconColor="text-sky-500"
-                inactiveIconColor="text-sky-500"
-                to={v3WaitpointTokensPath(organization, project, environment)}
-                isCollapsed={isCollapsed}
-              />
-              <SideMenuItem
-                name="Deployments"
-                icon={ServerStackIcon}
-                activeIconColor="text-deployments"
-                inactiveIconColor="text-deployments"
-                to={v3DeploymentsPath(organization, project, environment)}
-                data-action="deployments"
-                isCollapsed={isCollapsed}
-              />
-
-              <SideMenuItem
-                name="Test"
-                icon={BeakerIcon}
-                activeIconColor="text-tests"
-                inactiveIconColor="text-tests"
-                to={v3TestPath(organization, project, environment)}
-                data-action="test"
+                name="Sessions"
+                icon={AIChatIcon}
+                activeIconColor="text-sessions"
+                inactiveIconColor="text-text-dimmed"
+                to={v3SessionsPath(organization, project, environment)}
+                data-action="sessions"
+                badge={<NewBadge />}
                 isCollapsed={isCollapsed}
               />
             </div>
@@ -473,61 +424,28 @@ export function SideMenu({
                 onCollapseToggle={handleSectionToggle("ai")}
               >
                 <SideMenuItem
-                  name="Agents"
-                  icon={CpuChipIcon}
-                  activeIconColor="text-indigo-500"
-                  inactiveIconColor="text-indigo-500"
-                  to={v3AgentsPath(organization, project, environment)}
-                  isCollapsed={isCollapsed}
-                />
-                <SideMenuItem
-                  name="Sessions"
-                  icon={ArrowsRightLeftIcon}
-                  activeIconColor="text-teal-500"
-                  inactiveIconColor="text-teal-500"
-                  to={v3SessionsPath(organization, project, environment)}
-                  data-action="sessions"
-                  isCollapsed={isCollapsed}
-                />
-                <SideMenuItem
-                  name="Playground"
-                  icon={BeakerIcon}
-                  activeIconColor="text-indigo-400"
-                  inactiveIconColor="text-indigo-400"
-                  to={v3PlaygroundPath(organization, project, environment)}
-                  isCollapsed={isCollapsed}
-                />
-                <SideMenuItem
                   name="Prompts"
-                  icon={AIPromptsIcon}
+                  icon={AIPenIcon}
                   trailingIconClassName="size-6"
                   activeIconColor="text-aiPrompts"
-                  inactiveIconColor="text-aiPrompts"
+                  inactiveIconColor="text-text-dimmed"
                   to={v3PromptsPath(organization, project, environment)}
                   data-action="prompts"
+                  badge={<NewBadge />}
                   isCollapsed={isCollapsed}
                 />
                 {(user.admin || user.isImpersonating || featureFlags.hasAiAccess) && (
                   <SideMenuItem
                     name="Models"
-                    icon={CubeIcon}
-                    activeIconColor="text-purple-500"
-                    inactiveIconColor="text-purple-500"
+                    icon={Box3DIcon}
+                    activeIconColor="text-models"
+                    inactiveIconColor="text-text-dimmed"
                     to={v3ModelsPath(organization, project, environment)}
                     data-action="models"
+                    badge={<NewBadge />}
                     isCollapsed={isCollapsed}
                   />
                 )}
-                <SideMenuItem
-                  name="AI metrics"
-                  icon={AIMetricsIcon}
-                  trailingIconClassName="size-5"
-                  activeIconColor="text-aiMetrics"
-                  inactiveIconColor="text-aiMetrics"
-                  to={v3BuiltInDashboardPath(organization, project, environment, "llm")}
-                  data-action="ai-metrics"
-                  isCollapsed={isCollapsed}
-                />
               </SideMenuSection>
             )}
 
@@ -547,7 +465,7 @@ export function SideMenu({
                     name="Logs"
                     icon={LogsIcon}
                     activeIconColor="text-logs"
-                    inactiveIconColor="text-logs"
+                    inactiveIconColor="text-text-dimmed"
                     to={v3LogsPath(organization, project, environment)}
                     data-action="logs"
                     badge={<AlphaBadge />}
@@ -556,29 +474,38 @@ export function SideMenu({
                 )}
                 <SideMenuItem
                   name="Errors"
-                  icon={IconBugFilled}
+                  icon={BugIcon}
                   activeIconColor="text-errors"
-                  inactiveIconColor="text-errors"
+                  inactiveIconColor="text-text-dimmed"
                   to={v3ErrorsPath(organization, project, environment)}
                   data-action="errors"
                   isCollapsed={isCollapsed}
                 />
                 <SideMenuItem
                   name="Query"
-                  icon={TableCellsIcon}
+                  icon={CodeSquareIcon}
                   activeIconColor="text-query"
-                  inactiveIconColor="text-query"
+                  inactiveIconColor="text-text-dimmed"
                   to={queryPath(organization, project, environment)}
                   data-action="query"
+                  isCollapsed={isCollapsed}
+                />
+                <SideMenuItem
+                  name="Queues"
+                  icon={QueuesIcon}
+                  activeIconColor="text-queues"
+                  inactiveIconColor="text-text-dimmed"
+                  to={v3QueuesPath(organization, project, environment)}
+                  data-action="queues"
                   isCollapsed={isCollapsed}
                 />
                 <SideMenuItem
                   name="Dashboards"
                   icon={ChartBarIcon}
                   activeIconColor="text-metrics"
-                  inactiveIconColor="text-metrics"
-                  to={v3BuiltInDashboardPath(organization, project, environment, "overview")}
-                  data-action="metrics-overview"
+                  inactiveIconColor="text-text-dimmed"
+                  to={v3DashboardsLandingPath(organization, project, environment)}
+                  data-action="dashboards-landing"
                   isCollapsed={isCollapsed}
                   action={
                     <CreateDashboardButton
@@ -600,12 +527,78 @@ export function SideMenu({
             )}
 
             <SideMenuSection
+              title="Deployments"
+              isSideMenuCollapsed={isCollapsed}
+              itemSpacingClassName="space-y-0"
+              initialCollapsed={getSectionCollapsed(
+                user.dashboardPreferences.sideMenu,
+                "deployments"
+              )}
+              onCollapseToggle={handleSectionToggle("deployments")}
+            >
+              <SideMenuItem
+                name="Deploys"
+                icon={DeploymentsIcon}
+                activeIconColor="text-deployments"
+                inactiveIconColor="text-text-dimmed"
+                to={v3DeploymentsPath(organization, project, environment)}
+                data-action="deployments"
+                isCollapsed={isCollapsed}
+              />
+              <SideMenuItem
+                name="Environment variables"
+                icon={IDIcon}
+                activeIconColor="text-environmentVariables"
+                inactiveIconColor="text-text-dimmed"
+                to={v3EnvironmentVariablesPath(organization, project, environment)}
+                data-action="environment variables"
+                isCollapsed={isCollapsed}
+              />
+              <SideMenuItem
+                name="Preview branches"
+                icon={BranchEnvironmentIconSmall}
+                activeIconColor="text-previewBranches"
+                inactiveIconColor="text-text-dimmed"
+                to={branchesPath(organization, project, environment)}
+                data-action="preview-branches"
+                isCollapsed={isCollapsed}
+              />
+              <SideMenuItem
+                name="Regions"
+                icon={GlobeLinesIcon}
+                activeIconColor="text-regions"
+                inactiveIconColor="text-text-dimmed"
+                to={regionsPath(organization, project, environment)}
+                data-action="regions"
+                isCollapsed={isCollapsed}
+              />
+            </SideMenuSection>
+
+            <SideMenuSection
               title="Manage"
               isSideMenuCollapsed={isCollapsed}
               itemSpacingClassName="space-y-0"
               initialCollapsed={getSectionCollapsed(user.dashboardPreferences.sideMenu, "manage")}
               onCollapseToggle={handleSectionToggle("manage")}
             >
+              <SideMenuItem
+                name="Waitpoint tokens"
+                icon={WaitpointTokenIcon}
+                activeIconColor="text-sky-500"
+                inactiveIconColor="text-text-dimmed"
+                to={v3WaitpointTokensPath(organization, project, environment)}
+                data-action="waitpoint-tokens"
+                isCollapsed={isCollapsed}
+              />
+              <SideMenuItem
+                name="Batches"
+                icon={BatchesIcon}
+                activeIconColor="text-batches"
+                inactiveIconColor="text-text-dimmed"
+                to={v3BatchesPath(organization, project, environment)}
+                data-action="batches"
+                isCollapsed={isCollapsed}
+              />
               <SideMenuItem
                 name="Bulk actions"
                 icon={ListCheckedIcon}
@@ -625,30 +618,12 @@ export function SideMenu({
                 isCollapsed={isCollapsed}
               />
               <SideMenuItem
-                name="Environment variables"
-                icon={IdentificationIcon}
-                activeIconColor="text-text-bright"
-                inactiveIconColor="text-text-dimmed"
-                to={v3EnvironmentVariablesPath(organization, project, environment)}
-                data-action="environment variables"
-                isCollapsed={isCollapsed}
-              />
-              <SideMenuItem
                 name="Alerts"
-                icon={BellAlertIcon}
+                icon={BellIcon}
                 activeIconColor="text-text-bright"
                 inactiveIconColor="text-text-dimmed"
                 to={v3ProjectAlertsPath(organization, project, environment)}
                 data-action="alerts"
-                isCollapsed={isCollapsed}
-              />
-              <SideMenuItem
-                name="Preview branches"
-                icon={BranchEnvironmentIconSmall}
-                activeIconColor="text-text-bright"
-                inactiveIconColor="text-text-dimmed"
-                to={branchesPath(organization, project, environment)}
-                data-action="preview-branches"
                 isCollapsed={isCollapsed}
               />
               {isManagedCloud && (
@@ -663,57 +638,42 @@ export function SideMenu({
                 />
               )}
               <SideMenuItem
-                name="Regions"
-                icon={GlobeAmericasIcon}
-                activeIconColor="text-text-bright"
-                inactiveIconColor="text-text-dimmed"
-                to={regionsPath(organization, project, environment)}
-                data-action="regions"
-                isCollapsed={isCollapsed}
-              />
-              <SideMenuItem
                 name="Limits"
-                icon={AdjustmentsHorizontalIcon}
+                icon={DialIcon}
                 activeIconColor="text-text-bright"
                 inactiveIconColor="text-text-dimmed"
                 to={limitsPath(organization, project, environment)}
                 data-action="limits"
                 isCollapsed={isCollapsed}
               />
-            </SideMenuSection>
-
-            <SideMenuSection
-              title="Project settings"
-              isSideMenuCollapsed={isCollapsed}
-              itemSpacingClassName="space-y-0"
-              initialCollapsed={getSectionCollapsed(
-                user.dashboardPreferences.sideMenu,
-                "project-settings"
-              )}
-              onCollapseToggle={handleSectionToggle("project-settings")}
-            >
-              <SideMenuItem
-                name="General"
-                icon={Cog8ToothIcon}
-                activeIconColor="text-text-bright"
-                inactiveIconColor="text-text-dimmed"
-                to={v3ProjectSettingsGeneralPath(organization, project, environment)}
-                data-action="project-settings-general"
-                isCollapsed={isCollapsed}
-              />
               <SideMenuItem
                 name="Integrations"
-                icon={PuzzlePieceIcon}
+                icon={IntegrationsIcon}
                 activeIconColor="text-text-bright"
                 inactiveIconColor="text-text-dimmed"
                 to={v3ProjectSettingsIntegrationsPath(organization, project, environment)}
                 data-action="project-settings-integrations"
                 isCollapsed={isCollapsed}
               />
+              <SideMenuItem
+                name="Project settings"
+                icon={SlidersIcon}
+                activeIconColor="text-text-bright"
+                inactiveIconColor="text-text-dimmed"
+                to={v3ProjectSettingsGeneralPath(organization, project, environment)}
+                data-action="project-settings-general"
+                isCollapsed={isCollapsed}
+              />
             </SideMenuSection>
           </div>
         </div>
         <div>
+          <NotificationPanel
+            isCollapsed={isCollapsed}
+            hasIncident={incidentStatus.hasIncident}
+            organizationId={organization.id}
+            projectId={project.id}
+          />
           <IncidentStatusPanel
             isCollapsed={isCollapsed}
             title={incidentStatus.title}
@@ -727,12 +687,6 @@ export function SideMenu({
             hasIncident={incidentStatus.hasIncident}
             isManagedCloud={incidentStatus.isManagedCloud}
           />
-          <NotificationPanel
-            isCollapsed={isCollapsed}
-            hasIncident={incidentStatus.hasIncident}
-            organizationId={organization.id}
-            projectId={project.id}
-          />
           <motion.div
             layout
             transition={{ duration: 0.2, ease: "easeInOut" }}
@@ -741,7 +695,11 @@ export function SideMenu({
               isCollapsed && "items-center"
             )}
           >
-            <HelpAndAI isCollapsed={isCollapsed} organizationId={organization.id} projectId={project.id} />
+            <HelpAndAI
+              isCollapsed={isCollapsed}
+              organizationId={organization.id}
+              projectId={project.id}
+            />
             {isFreeUser && (
               <CollapsibleHeight isCollapsed={isCollapsed}>
                 <FreePlanUsage
@@ -899,7 +857,7 @@ function ProjectSelector({
                 )}
               >
                 <SelectorDivider />
-                <span className="truncate text-2sm font-normal text-text-bright">
+                <span className="truncate text-[0.90625rem] font-medium tracking-[-0.01em] text-text-bright">
                   {project.name ?? "Select a project"}
                 </span>
               </span>
@@ -968,7 +926,7 @@ function ProjectSelector({
               iconSpacing="gap-1.5"
               className="group-hover/button:border-charcoal-500"
             >
-              <CogIcon className="size-4 text-text-dimmed" />
+              <SlidersIcon className="size-4 text-text-dimmed" />
               <span className="text-text-bright">Settings</span>
             </LinkButton>
             {isManagedCloud && (
@@ -979,7 +937,7 @@ function ProjectSelector({
                 iconSpacing="gap-1.5"
                 className="group-hover/button:border-charcoal-500"
               >
-                <ChartBarIcon className="size-4 text-text-dimmed" />
+                <UsageIcon className="size-4 text-text-dimmed" />
                 <span className="text-text-bright">Usage</span>
               </LinkButton>
             )}
@@ -998,7 +956,7 @@ function ProjectSelector({
                   </div>
                 }
                 isSelected={isSelected}
-                icon={isSelected ? FolderOpenIcon : FolderIcon}
+                icon={isSelected ? FolderOpenIcon : FolderClosedIcon}
                 leadingIconClassName="text-indigo-500"
               />
             );
@@ -1021,15 +979,15 @@ function ProjectSelector({
           <PopoverMenuItem
             to={accountPath()}
             title="Account"
-            icon={UserProfilePhoto}
-            leadingIconClassName="text-text-dimmed rounded-full border border-transparent"
+            icon={AvatarCircleIcon}
+            leadingIconClassName="text-text-dimmed"
           />
         </div>
         <div className="border-t border-charcoal-700 p-1">
           <PopoverMenuItem
             to={logoutPath()}
             title="Logout"
-            icon={ArrowRightOnRectangleIcon}
+            icon={ArrowRightSquareIcon}
             leadingIconClassName="text-text-dimmed"
             danger
           />
@@ -1084,7 +1042,7 @@ function SwitchOrganizations({
           <ButtonContent
             variant="small-menu-item"
             className="hover:bg-charcoal-750"
-            LeadingIcon={ArrowPathRoundedSquareIcon}
+            LeadingIcon={ArrowLeftRightIcon}
             leadingIconClassName="text-text-dimmed"
             TrailingIcon={ChevronRightIcon}
             trailingIconClassName="text-text-dimmed"
@@ -1191,7 +1149,15 @@ function CollapsibleHeight({
   );
 }
 
-function HelpAndAI({ isCollapsed, organizationId, projectId }: { isCollapsed: boolean; organizationId: string; projectId: string }) {
+function HelpAndAI({
+  isCollapsed,
+  organizationId,
+  projectId,
+}: {
+  isCollapsed: boolean;
+  organizationId: string;
+  projectId: string;
+}) {
   return (
     <LayoutGroup>
       <div
@@ -1201,7 +1167,11 @@ function HelpAndAI({ isCollapsed, organizationId, projectId }: { isCollapsed: bo
         )}
       >
         <ShortcutsAutoOpen />
-        <HelpAndFeedback isCollapsed={isCollapsed} organizationId={organizationId} projectId={projectId} />
+        <HelpAndFeedback
+          isCollapsed={isCollapsed}
+          organizationId={organizationId}
+          projectId={projectId}
+        />
         <AskAI isCollapsed={isCollapsed} />
       </div>
     </LayoutGroup>

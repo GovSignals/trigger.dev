@@ -1,12 +1,9 @@
-import { json } from "@remix-run/server-runtime";
 import { z } from "zod";
 import { $replica } from "~/db.server";
 import { getRequestAbortSignal } from "~/services/httpAsyncStorage.server";
 import { resolveRealtimeStreamClient } from "~/services/realtime/resolveRealtimeStreamClient.server";
-import {
-  anyResource,
-  createLoaderApiRoute,
-} from "~/services/routeBuilders/apiBuilder.server";
+import { anyResource, createLoaderApiRoute } from "~/services/routeBuilders/apiBuilder.server";
+import { runStore } from "~/v3/runStore.server";
 
 const ParamsSchema = z.object({
   runId: z.string(),
@@ -18,19 +15,22 @@ export const loader = createLoaderApiRoute(
     allowJWT: true,
     corsStrategy: "all",
     findResource: async (params, authentication) => {
-      return $replica.taskRun.findFirst({
-        where: {
+      return runStore.findRun(
+        {
           friendlyId: params.runId,
           runtimeEnvironmentId: authentication.environment.id,
         },
-        include: {
-          batch: {
-            select: {
-              friendlyId: true,
+        {
+          include: {
+            batch: {
+              select: {
+                friendlyId: true,
+              },
             },
           },
         },
-      });
+        $replica
+      );
     },
     authorization: {
       action: "read",

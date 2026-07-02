@@ -3,11 +3,13 @@ import { json } from "@remix-run/server-runtime";
 import type { TaskRun } from "@trigger.dev/database";
 import { z } from "zod";
 import { prisma } from "~/db.server";
+import { runStore } from "~/v3/runStore.server";
 import { authenticateApiRequest } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
 import { ReplayTaskRunService } from "~/v3/services/replayTaskRun.server";
 import { findRunByIdWithMollifierFallback } from "~/v3/mollifier/readFallback.server";
 import { sanitizeTriggerSource } from "~/utils/triggerSource";
+import { clientSafeErrorMessage } from "~/utils/prismaErrors";
 
 const ParamsSchema = z.object({
   /* This is the run friendly ID */
@@ -72,12 +74,13 @@ export async function action({ request, params }: ActionFunctionArgs) {
     // filter beyond friendlyId is the existing semantic; findFirst with
     // env scoping tightens it minimally without changing behaviour for
     // a correctly-authed caller.
-    let taskRun: TaskRun | null = await prisma.taskRun.findFirst({
-      where: {
+    let taskRun: TaskRun | null = await runStore.findRun(
+      {
         friendlyId: runParam,
         runtimeEnvironmentId: env.id,
       },
-    });
+      prisma
+    );
 
     if (!taskRun) {
       // Buffered fallback. SyntheticRun carries every field
@@ -122,8 +125,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
       return json({ error: "Run not found" }, { status: 404 });
     }
 
-    const triggerSource =
-      sanitizeTriggerSource(request.headers.get("x-trigger-source")) ?? "api";
+    const triggerSource = sanitizeTriggerSource(request.headers.get("x-trigger-source")) ?? "api";
 
     const service = new ReplayTaskRunService();
     const newRun = await service.call(taskRun, { triggerSource });
@@ -145,7 +147,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
         },
         run: runParam,
       });
-      return json({ error: error.message }, { status: 400 });
+      return json({ error: clientSafeErrorMessage(error) }, { status: 400 });
     } else {
       logger.error("Failed to replay run", { error: JSON.stringify(error), run: runParam });
       return json({ error: JSON.stringify(error) }, { status: 400 });

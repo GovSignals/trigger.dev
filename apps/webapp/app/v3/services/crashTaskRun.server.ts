@@ -1,7 +1,8 @@
 import { tryCatch } from "@trigger.dev/core/utils";
-import { sanitizeError, TaskRunErrorCodes, TaskRunInternalError } from "@trigger.dev/core/v3";
-import { TaskRun, TaskRunAttempt } from "@trigger.dev/database";
-import { AuthenticatedEnvironment } from "~/services/apiAuth.server";
+import type { TaskRunInternalError } from "@trigger.dev/core/v3";
+import { sanitizeError, TaskRunErrorCodes } from "@trigger.dev/core/v3";
+import type { TaskRun, TaskRunAttempt } from "@trigger.dev/database";
+import type { AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
 import { FailedTaskRunRetryHelper } from "../failedTaskRun.server";
 import { CRASHABLE_ATTEMPT_STATUSES, isCrashableRunStatus } from "../taskStatus";
@@ -35,11 +36,7 @@ export class CrashTaskRunService extends BaseService {
       return;
     }
 
-    const taskRun = await this._prisma.taskRun.findFirst({
-      where: {
-        id: runId,
-      },
-    });
+    const taskRun = await this.runStore.findRun({ id: runId }, this._prisma);
 
     if (!taskRun) {
       logger.error("[CrashTaskRunService] Task run not found", { runId });

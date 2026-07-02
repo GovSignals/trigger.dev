@@ -1,23 +1,22 @@
-import {
+import type {
   BatchTriggerTaskV2RequestBody,
   BatchTriggerTaskV2Response,
   IOPacket,
-  packetRequiresOffloading,
-  parsePacket,
 } from "@trigger.dev/core/v3";
+import { packetRequiresOffloading, parsePacket } from "@trigger.dev/core/v3";
+import type { BatchTaskRun, TaskRunAttempt } from "@trigger.dev/database";
 import {
-  BatchTaskRun,
   isPrismaRaceConditionError,
   isPrismaRetriableError,
   isUniqueConstraintError,
   Prisma,
-  TaskRunAttempt,
 } from "@trigger.dev/database";
 import { z } from "zod";
-import { prisma, PrismaClientOrTransaction } from "~/db.server";
+import type { PrismaClientOrTransaction } from "~/db.server";
+import { prisma } from "~/db.server";
 import { env } from "~/env.server";
 import { batchTaskRunItemStatusForRunStatus } from "~/models/taskRun.server";
-import { AuthenticatedEnvironment } from "~/services/apiAuth.server";
+import type { AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
 import { getEntitlement } from "~/services/platform.v3.server";
 import { batchTriggerWorker } from "../batchTriggerWorker.server";
@@ -335,15 +334,18 @@ export class BatchTriggerV3Service extends BaseService {
     }
 
     // Group items by taskIdentifier
-    const itemsByTask = body.items.reduce((acc, item) => {
-      if (!item.options?.idempotencyKey) return acc;
+    const itemsByTask = body.items.reduce(
+      (acc, item) => {
+        if (!item.options?.idempotencyKey) return acc;
 
-      if (!acc[item.task]) {
-        acc[item.task] = [];
-      }
-      acc[item.task].push(item);
-      return acc;
-    }, {} as Record<string, typeof body.items>);
+        if (!acc[item.task]) {
+          acc[item.task] = [];
+        }
+        acc[item.task].push(item);
+        return acc;
+      },
+      {} as Record<string, typeof body.items>
+    );
 
     logger.debug("[BatchTriggerV2][call] Grouped items by task identifier", {
       itemsByTask,
@@ -352,20 +354,23 @@ export class BatchTriggerV3Service extends BaseService {
     // Fetch cached runs for each task identifier separately to make use of the index
     const cachedRuns = await Promise.all(
       Object.entries(itemsByTask).map(([taskIdentifier, items]) =>
-        this._prisma.taskRun.findMany({
-          where: {
-            runtimeEnvironmentId: environment.id,
-            taskIdentifier,
-            idempotencyKey: {
-              in: items.map((i) => i.options?.idempotencyKey).filter(Boolean),
+        this.runStore.findRuns(
+          {
+            where: {
+              runtimeEnvironmentId: environment.id,
+              taskIdentifier,
+              idempotencyKey: {
+                in: items.map((i) => i.options?.idempotencyKey).filter(Boolean),
+              },
+            },
+            select: {
+              friendlyId: true,
+              idempotencyKey: true,
+              idempotencyKeyExpiresAt: true,
             },
           },
-          select: {
-            friendlyId: true,
-            idempotencyKey: true,
-            idempotencyKeyExpiresAt: true,
-          },
-        })
+          this._prisma
+        )
       )
     ).then((results) => results.flat());
 
@@ -408,10 +413,10 @@ export class BatchTriggerV3Service extends BaseService {
 
     // Expire the cached runs that are no longer valid
     if (expiredRunIds.size) {
-      await this._prisma.taskRun.updateMany({
-        where: { friendlyId: { in: Array.from(expiredRunIds) } },
-        data: { idempotencyKey: null },
-      });
+      await this.runStore.clearIdempotencyKey(
+        { byFriendlyIds: Array.from(expiredRunIds) },
+        this._prisma
+      );
     }
 
     return runs;
@@ -930,7 +935,12 @@ export class BatchTriggerV3Service extends BaseService {
 
       const filename = `${pathPrefix}/payload.json`;
 
-      const uploadedFilename = await uploadPacketToObjectStore(filename, packet.data, packet.dataType, environment);
+      const uploadedFilename = await uploadPacketToObjectStore(
+        filename,
+        packet.data,
+        packet.dataType,
+        environment
+      );
 
       return {
         data: uploadedFilename,

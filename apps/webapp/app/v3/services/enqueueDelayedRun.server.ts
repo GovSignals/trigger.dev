@@ -5,6 +5,7 @@ import { commonWorker } from "../commonWorker.server";
 import { BaseService } from "./baseService.server";
 import { enqueueRun } from "./enqueueRun.server";
 import { ExpireEnqueuedRunService } from "./expireEnqueuedRun.server";
+import { isV3Disabled } from "../engineDeprecation.server";
 
 export class EnqueueDelayedRunService extends BaseService {
   public static async enqueue(runId: string, runAt?: Date) {
@@ -32,43 +33,52 @@ export class EnqueueDelayedRunService extends BaseService {
   }
 
   public async call(runId: string) {
-    const run = await this._prisma.taskRun.findFirst({
-      where: {
+    const run = await this.runStore.findRun(
+      {
         id: runId,
       },
-      include: {
-        runtimeEnvironment: {
-          include: {
-            organization: true,
-            project: true,
+      {
+        include: {
+          runtimeEnvironment: {
+            include: {
+              organization: true,
+              project: true,
+            },
           },
-        },
-        dependency: {
-          include: {
-            dependentBatchRun: {
-              include: {
-                dependentTaskAttempt: {
-                  include: {
-                    taskRun: true,
+          dependency: {
+            include: {
+              dependentBatchRun: {
+                include: {
+                  dependentTaskAttempt: {
+                    include: {
+                      taskRun: true,
+                    },
                   },
                 },
               },
-            },
-            dependentAttempt: {
-              include: {
-                taskRun: true,
+              dependentAttempt: {
+                include: {
+                  taskRun: true,
+                },
               },
             },
           },
         },
       },
-    });
+      this._prisma
+    );
 
     if (!run) {
       logger.debug("Could not find delayed run to enqueue", {
         runId,
       });
 
+      return;
+    }
+
+    // v3 (engine V1) shutdown: don't enqueue delayed V1 runs into MarQS. v4 is unaffected.
+    if (isV3Disabled() && run.engine === "V1") {
+      logger.debug("[EnqueueDelayedRunService] Skipping enqueue for shut-down v3 run", { runId });
       return;
     }
 

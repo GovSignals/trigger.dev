@@ -2,17 +2,20 @@ import { logger } from "~/services/logger.server";
 import { commonWorker } from "../commonWorker.server";
 import { socketIo } from "../handleSocketIo.server";
 import { BaseService } from "./baseService.server";
+import { isV3Disabled } from "../engineDeprecation.server";
 
 export class RetryAttemptService extends BaseService {
   public async call(runId: string) {
-    const taskRun = await this._prisma.taskRun.findFirst({
-      where: {
-        id: runId,
-      },
-    });
+    const taskRun = await this.runStore.findRun({ id: runId }, this._prisma);
 
     if (!taskRun) {
       logger.error("Task run not found", { runId });
+      return;
+    }
+
+    // v3 (engine V1) shutdown: don't retry abandoned V1 runs. v4 is unaffected.
+    if (isV3Disabled() && taskRun.engine === "V1") {
+      logger.debug("[RetryAttemptService] Skipping retry for shut-down v3 run", { runId });
       return;
     }
 

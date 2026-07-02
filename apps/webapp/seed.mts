@@ -1,7 +1,8 @@
 import { prisma } from "./app/db.server";
 import { createOrganization } from "./app/models/organization.server";
 import { createProject } from "./app/models/project.server";
-import { AuthenticationMethod, Organization, Prisma, User } from "@trigger.dev/database";
+import type { Organization, Prisma, User } from "@trigger.dev/database";
+import { AuthenticationMethod } from "@trigger.dev/database";
 
 async function seed() {
   console.log("🌱 Starting seed...");
@@ -168,6 +169,7 @@ seed()
   })
   .finally(async () => {
     await prisma.$disconnect();
+    process.exit(0);
   });
 
 async function findOrCreateOrganization(
@@ -293,9 +295,7 @@ async function ensureDefaultWorkerGroup() {
 
     console.log(`✅ Created worker instance group: ${workerGroup.name} (${workerGroup.id})`);
   } else {
-    console.log(
-      `✅ Worker instance group already exists: ${workerGroup.name} (${workerGroup.id})`
-    );
+    console.log(`✅ Worker instance group already exists: ${workerGroup.name} (${workerGroup.id})`);
   }
 
   // Set the feature flag

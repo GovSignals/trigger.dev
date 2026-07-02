@@ -605,7 +605,7 @@ export type DeploymentTriggeredVia = z.infer<typeof DeploymentTriggeredVia>;
 
 export const UpsertBranchRequestBody = z.object({
   git: GitMeta.optional(),
-  env: z.enum(["preview"]),
+  env: z.enum(["preview", "development"]),
   branch: z.string(),
 });
 
@@ -1832,7 +1832,7 @@ export function isWaitpointOutputTimeout(output: string): boolean {
   try {
     const json = JSON.parse(output);
     return json.code === WAITPOINT_TIMEOUT_ERROR_CODE;
-  } catch (e) {
+  } catch (_e) {
     return false;
   }
 }
@@ -1993,6 +1993,8 @@ export const RetrieveSpanDetailResponseBody = z.object({
       inputCost: z.number().optional(),
       outputCost: z.number().optional(),
       totalCost: z.number().optional(),
+      cachedCost: z.number().optional(),
+      cacheCreationCost: z.number().optional(),
       tokensPerSecond: z.number().optional(),
       msToFirstChunk: z.number().optional(),
       durationMs: z.number(),

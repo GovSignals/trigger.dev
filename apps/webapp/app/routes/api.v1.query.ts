@@ -1,10 +1,7 @@
 import { json } from "@remix-run/server-runtime";
 import { QueryError } from "@internal/clickhouse";
 import { z } from "zod";
-import {
-  createActionApiRoute,
-  everyResource,
-} from "~/services/routeBuilders/apiBuilder.server";
+import { createActionApiRoute, everyResource } from "~/services/routeBuilders/apiBuilder.server";
 import { executeQuery, type QueryScope } from "~/services/queryService.server";
 import { logger } from "~/services/logger.server";
 import { rowsToCSV } from "~/utils/dataExport";
@@ -91,7 +88,7 @@ const { action, loader } = createActionApiRoute(
       );
     }
 
-    const { result, periodClipped, maxQueryPeriod } = queryResult;
+    const { result, periodClipped: _periodClipped, maxQueryPeriod: _maxQueryPeriod } = queryResult;
 
     if (format === "csv") {
       const csv = rowsToCSV(result.rows, result.columns);

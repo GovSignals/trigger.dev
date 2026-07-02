@@ -1,6 +1,7 @@
 import { type LoaderFunctionArgs } from "@remix-run/server-runtime";
 import { z } from "zod";
 import { $replica } from "~/db.server";
+import { runStore } from "~/v3/runStore.server";
 import { findProjectBySlug } from "~/models/project.server";
 import { findEnvironmentBySlug } from "~/models/runtimeEnvironment.server";
 import { getRequestAbortSignal } from "~/services/httpAsyncStorage.server";
@@ -50,23 +51,22 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
   // Verify the run lives in this environment — keeps callers from
   // subscribing to arbitrary sessions via `/runs/$runParam/...`.
-  const run = await $replica.taskRun.findFirst({
-    where: {
+  const run = await runStore.findRun(
+    {
       friendlyId: runParam,
       runtimeEnvironmentId: environment.id,
     },
-    select: { id: true, friendlyId: true },
-  });
+    {
+      select: { id: true, friendlyId: true },
+    },
+    $replica
+  );
 
   if (!run) {
     return new Response("Run not found", { status: 404 });
   }
 
-  const session = await resolveSessionByIdOrExternalId(
-    $replica,
-    environment.id,
-    sessionId
-  );
+  const session = await resolveSessionByIdOrExternalId($replica, environment.id, sessionId);
 
   if (!session) {
     return new Response("Session not found", { status: 404 });

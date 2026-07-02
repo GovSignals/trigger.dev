@@ -2,10 +2,12 @@ import { type PrismaClient, prisma } from "~/db.server";
 import { logger } from "~/services/logger.server";
 import { requireUserId } from "~/services/session.server";
 import { singleton } from "~/utils/singleton";
-import { ABORT_REASON_SEND_ERROR, createSSELoader, SendFunction } from "~/utils/sse";
+import type { SendFunction } from "~/utils/sse";
+import { ABORT_REASON_SEND_ERROR, createSSELoader } from "~/utils/sse";
 import { throttle } from "~/utils/throttle";
 import { getMollifierBuffer } from "~/v3/mollifier/mollifierBuffer.server";
 import { deserialiseMollifierSnapshot } from "~/v3/mollifier/mollifierSnapshot.server";
+import { runStore } from "~/v3/runStore.server";
 import { tracePubSub } from "~/v3/services/tracePubSub.server";
 
 const PING_INTERVAL = 5_000;
@@ -36,8 +38,8 @@ export class RunStreamPresenter {
         // Scope the lookup to organizations the requesting user is a member
         // of, matching RunPresenter's run lookup. Unauthorized and missing
         // runs are indistinguishable (both 404).
-        const run = await prismaClient.taskRun.findFirst({
-          where: {
+        const run = await runStore.findRun(
+          {
             friendlyId: runFriendlyId,
             project: {
               organization: {
@@ -49,10 +51,13 @@ export class RunStreamPresenter {
               },
             },
           },
-          select: {
-            traceId: true,
+          {
+            select: {
+              traceId: true,
+            },
           },
-        });
+          prismaClient
+        );
 
         // Fall back to the mollifier buffer when the run isn't in PG yet.
         // The buffered run has no execution events to stream, but we still
@@ -103,7 +108,9 @@ export class RunStreamPresenter {
         });
 
         // Subscribe to trace updates
-        const { unsubscribe, eventEmitter } = await tracePubSub.subscribeToTrace(resolvedRun.traceId);
+        const { unsubscribe, eventEmitter } = await tracePubSub.subscribeToTrace(
+          resolvedRun.traceId
+        );
 
         // Only send max every 1 second
         const throttledSend = throttle(
@@ -152,7 +159,7 @@ export class RunStreamPresenter {
             try {
               // Send an actual message so the client refreshes
               throttledSend({ send, event: "message", data: new Date().toISOString() });
-            } catch (error) {
+            } catch (_error) {
               // If we can't send a ping, the connection is likely dead
               return false;
             }

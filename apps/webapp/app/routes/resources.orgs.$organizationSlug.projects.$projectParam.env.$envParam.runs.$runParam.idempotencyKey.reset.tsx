@@ -1,18 +1,19 @@
-import { type ActionFunction, json } from "@remix-run/node";
+import { type ActionFunction } from "@remix-run/node";
 import { prisma } from "~/db.server";
 import { jsonWithErrorMessage, jsonWithSuccessMessage } from "~/models/message.server";
 import { logger } from "~/services/logger.server";
 import { requireUserId } from "~/services/session.server";
-import { ResetIdempotencyKeyService } from "~/v3/services/resetIdempotencyKey.server";
 import { v3RunParamsSchema } from "~/utils/pathBuilder";
+import { runStore } from "~/v3/runStore.server";
+import { ResetIdempotencyKeyService } from "~/v3/services/resetIdempotencyKey.server";
 
 export const action: ActionFunction = async ({ request, params }) => {
   const userId = await requireUserId(request);
   const { projectParam, organizationSlug, envParam, runParam } = v3RunParamsSchema.parse(params);
 
   try {
-    const taskRun = await prisma.taskRun.findFirst({
-      where: {
+    const taskRun = await runStore.findRun(
+      {
         friendlyId: runParam,
         project: {
           slug: projectParam,
@@ -29,13 +30,16 @@ export const action: ActionFunction = async ({ request, params }) => {
           slug: envParam,
         },
       },
-      select: {
-        id: true,
-        idempotencyKey: true,
-        taskIdentifier: true,
-        runtimeEnvironmentId: true,
+      {
+        select: {
+          id: true,
+          idempotencyKey: true,
+          taskIdentifier: true,
+          runtimeEnvironmentId: true,
+        },
       },
-    });
+      prisma
+    );
 
     if (!taskRun) {
       return jsonWithErrorMessage({}, request, "Run not found");

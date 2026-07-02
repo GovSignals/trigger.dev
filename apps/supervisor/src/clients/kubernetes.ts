@@ -1,9 +1,8 @@
 import * as k8s from "@kubernetes/client-node";
-import { Informer } from "@kubernetes/client-node";
-import { ListPromise } from "@kubernetes/client-node";
-import { KubernetesObject } from "@kubernetes/client-node";
+import type { Informer, KubernetesObject, ListPromise } from "@kubernetes/client-node";
 import { assertExhaustive } from "@trigger.dev/core/utils";
 import { SimpleStructuredLogger } from "@trigger.dev/core/v3/utils/structuredLogger";
+import * as https from "node:https";
 
 export const RUNTIME_ENV = process.env.KUBERNETES_PORT ? "kubernetes" : "local";
 
@@ -53,3 +52,57 @@ function getKubeConfig() {
 }
 
 export { k8s };
+
+/**
+ * Builds a function that scrapes the apiserver's Prometheus /metrics endpoint.
+ * One lightweight aggregate read - not a pod listing. Requires the service
+ * account to be granted GET on the /metrics non-resource URL.
+ */
+export function createApiserverMetricsFetcher(timeoutMs: number): () => Promise<string> {
+  const kubeConfig = getKubeConfig();
+
+  return async () => {
+    const cluster = kubeConfig.getCurrentCluster();
+    if (!cluster) {
+      throw new Error("no current cluster in kubeconfig");
+    }
+    const url = new URL(`${cluster.server}/metrics`);
+    const opts: https.RequestOptions = {
+      method: "GET",
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+    };
+    // applyToHTTPSOptions sets the cluster CA, client cert/key, and auth headers
+    // (incl. exec plugins) on the request - so TLS verifies against the cluster
+    // CA, not the system store. The fetch-options path attaches the CA as an
+    // https.Agent, which global fetch (undici) ignores.
+    await kubeConfig.applyToHTTPSOptions(opts);
+
+    return new Promise<string>((resolve, reject) => {
+      const req = https.request(opts, (res) => {
+        const status = res.statusCode ?? 0;
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => {
+          if (status >= 200 && status < 300) {
+            resolve(body);
+          } else {
+            reject(new Error(`apiserver /metrics scrape failed: ${status}`));
+          }
+        });
+      });
+      // Without this a hung connect/TLS/read never settles, and the monitor's
+      // refreshInFlight guard would freeze the source (silent fail-open).
+      req.setTimeout(timeoutMs, () => {
+        req.destroy(new Error(`apiserver /metrics scrape timed out after ${timeoutMs}ms`));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  };
+}

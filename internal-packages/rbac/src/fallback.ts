@@ -11,11 +11,13 @@ import type {
   RoleAssignmentResult,
   RoleBaseAccessController,
   RoleMutationResult,
+  UserActorAuthResult,
 } from "@trigger.dev/plugins";
+import { isUserActorToken, verifyUserActorToken } from "@trigger.dev/plugins";
 import { createHash } from "node:crypto";
 import type { PrismaClient } from "@trigger.dev/database";
 import { validateJWT } from "@trigger.dev/core/v3/jwt";
-import { sanitizeBranchName } from "@trigger.dev/core/v3/utils/gitBranch";
+import { isDefaultDevBranch, sanitizeBranchName } from "@trigger.dev/core/v3/utils/gitBranch";
 import { buildFallbackAbility, buildJwtAbility, permissiveAbility } from "./ability.js";
 
 export type FallbackPrismaClients = {
@@ -39,25 +41,34 @@ function resolvePrismaClients(input: PrismaInput): FallbackPrismaClients {
   return "primary" in input ? input : { primary: input, replica: input };
 }
 
+export type FallbackOptions = {
+  // Platform secret for verifying delegated user-actor tokens (tr_uat_).
+  userActorSecret?: string;
+};
+
 export class RoleBaseAccessFallback {
   private readonly clients: FallbackPrismaClients;
+  private readonly options: FallbackOptions;
 
-  constructor(prisma: PrismaInput) {
+  constructor(prisma: PrismaInput, options?: FallbackOptions) {
     this.clients = resolvePrismaClients(prisma);
+    this.options = options ?? {};
   }
 
   create(): RoleBaseAccessFallbackController {
-    return new RoleBaseAccessFallbackController(this.clients);
+    return new RoleBaseAccessFallbackController(this.clients, this.options);
   }
 }
 
 class RoleBaseAccessFallbackController implements RoleBaseAccessController {
   private readonly prisma: PrismaClient; // alias for primary — used by writes
   private readonly replica: PrismaClient;
+  private readonly userActorSecret?: string;
 
-  constructor(clients: FallbackPrismaClients) {
+  constructor(clients: FallbackPrismaClients, options?: FallbackOptions) {
     this.prisma = clients.primary;
     this.replica = clients.replica;
+    this.userActorSecret = options?.userActorSecret;
   }
 
   async isUsingPlugin(): Promise<boolean> {
@@ -80,7 +91,10 @@ class RoleBaseAccessFallbackController implements RoleBaseAccessController {
     // pre-RBAC routes that haven't been migrated, but it's a dead
     // code path for any route that uses `createLoaderApiRoute` /
     // `createActionApiRoute`.
-    const rawToken = request.headers.get("Authorization")?.replace(/^Bearer /, "").trim();
+    const rawToken = request.headers
+      .get("Authorization")
+      ?.replace(/^Bearer /, "")
+      .trim();
     if (!rawToken) return { ok: false, status: 401, error: "Invalid or Missing API key" };
 
     if (options?.allowJWT && isPublicJWT(rawToken)) {
@@ -116,6 +130,10 @@ class RoleBaseAccessFallbackController implements RoleBaseAccessController {
         : [];
       const realtime = result.payload.realtime as { skipColumns?: string[] } | undefined;
       const oneTimeUse = result.payload.otu === true;
+      // A JWT minted from a PAT/UAT exchange stamps `act: { sub: userId }` for
+      // attribution. Surface it so write handlers can record the acting user.
+      const act = result.payload.act as { sub?: unknown } | undefined;
+      const actSub = typeof act?.sub === "string" ? act.sub : undefined;
 
       return {
         ok: true,
@@ -127,11 +145,11 @@ class RoleBaseAccessFallbackController implements RoleBaseAccessController {
           projectId: env.projectId,
         },
         ability: buildJwtAbility(scopes),
-        jwt: { realtime, oneTimeUse },
+        jwt: { realtime, oneTimeUse, ...(actSub ? { act: { sub: actSub } } : {}) },
       };
     }
 
-    // PREVIEW envs are parents — operating "on a branch" means routing
+    // PREVIEW (and DEVELOPMENT) envs are parents — operating "on a branch" means routing
     // to a child env keyed by branchName. The customer authenticates
     // with the parent's apiKey + an `x-trigger-branch` header. Mirror
     // findEnvironmentByApiKey: include the matching child env so the
@@ -150,9 +168,7 @@ class RoleBaseAccessFallbackController implements RoleBaseAccessController {
         },
       },
       parentEnvironment: { select: { id: true, apiKey: true } },
-      childEnvironments: branchName
-        ? { where: { branchName, archivedAt: null } }
-        : undefined,
+      childEnvironments: branchName ? { where: { branchName, archivedAt: null } } : undefined,
     } as const;
     let env = await this.replica.runtimeEnvironment.findFirst({
       where: { apiKey: rawToken },
@@ -177,34 +193,37 @@ class RoleBaseAccessFallbackController implements RoleBaseAccessController {
       return { ok: false, status: 401, error: "Invalid API key" };
     }
 
-    // PREVIEW env requires a branch header; pivot to the child env so
-    // downstream code operates on the branch (its own id, but the
-    // parent's apiKey/orgMember/organization/project — exactly what
-    // findEnvironmentByApiKey does for the legacy auth path).
-    if (env.type === "PREVIEW") {
-      if (!branchName) {
-        return {
-          ok: false,
-          status: 401,
-          error: "x-trigger-branch header required for preview env",
+    if (env.type === "PREVIEW" && !branchName) {
+      return {
+        ok: false,
+        status: 401,
+        error: "x-trigger-branch header required for preview env",
+      };
+    }
+
+    if (env.type === "PREVIEW" || env.type === "DEVELOPMENT") {
+      // The "default" root branch is DEVELOPMENT-only: it maps to the dev root env
+      // (which carries no branch), so we skip the pivot there. For PREVIEW,
+      // "default" is an ordinary branch name and must still pivot to its child.
+      const isDevAndDefault = env.type === "DEVELOPMENT" && isDefaultDevBranch(branchName);
+      if (branchName !== null && !isDevAndDefault) {
+        const child = env.childEnvironments?.[0];
+        if (!child) {
+          return { ok: false, status: 401, error: "No matching branch env" };
+        }
+        // Pivot to the child env: child's id/type/branchName, parent's
+        // apiKey/orgMember/organization/project. parentEnvironment is set
+        // explicitly here so the slim shape stays internally consistent.
+        env = {
+          ...child,
+          apiKey: env.apiKey,
+          orgMember: env.orgMember,
+          organization: env.organization,
+          project: env.project,
+          parentEnvironment: { id: env.id, apiKey: env.apiKey },
+          childEnvironments: [],
         };
       }
-      const child = env.childEnvironments?.[0];
-      if (!child) {
-        return { ok: false, status: 401, error: "No matching branch env" };
-      }
-      // Pivot to the child env: child's id/type/branchName, parent's
-      // apiKey/orgMember/organization/project. parentEnvironment is set
-      // explicitly here so the slim shape stays internally consistent.
-      env = {
-        ...child,
-        apiKey: env.apiKey,
-        orgMember: env.orgMember,
-        organization: env.organization,
-        project: env.project,
-        parentEnvironment: { id: env.id, apiKey: env.apiKey },
-        childEnvironments: [],
-      };
     }
 
     const subject: RbacSubject = {
@@ -316,6 +335,39 @@ class RoleBaseAccessFallbackController implements RoleBaseAccessController {
     };
   }
 
+  async authenticateUserActor(
+    request: Request,
+    context: { organizationId?: string; projectId?: string }
+  ): Promise<UserActorAuthResult> {
+    const rawToken = request.headers
+      .get("Authorization")
+      ?.replace(/^Bearer /, "")
+      .trim();
+    if (!rawToken || !isUserActorToken(rawToken)) {
+      return { ok: false, status: 401, error: "Invalid or Missing user-actor token" };
+    }
+    if (!this.userActorSecret) {
+      return { ok: false, status: 401, error: "User-actor tokens are not configured" };
+    }
+    const claims = await verifyUserActorToken(this.userActorSecret, rawToken);
+    if (!claims) {
+      return { ok: false, status: 401, error: "Invalid user-actor token" };
+    }
+    return {
+      ok: true,
+      userId: claims.userId,
+      subject: {
+        type: "userActor",
+        userId: claims.userId,
+        client: claims.client,
+        organizationId: context.organizationId ?? "",
+        projectId: context.projectId,
+      },
+      // No plugin → permissive, matching the fallback's PAT behaviour.
+      ability: permissiveAbility,
+    };
+  }
+
   async systemRoles(_organizationId: string) {
     // No plugin installed → no seeded roles. Callers handle null by
     // hiding role-picker UI / skipping role assignment writes.
@@ -383,7 +435,9 @@ function isPublicJWT(token: string): boolean {
   const parts = token.split(".");
   if (parts.length !== 3) return false;
   try {
-    const payload = JSON.parse(Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    const payload = JSON.parse(
+      Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")
+    );
     return payload !== null && typeof payload === "object" && payload.pub === true;
   } catch {
     return false;
@@ -394,7 +448,9 @@ function extractJWTSub(token: string): string | undefined {
   const parts = token.split(".");
   if (parts.length !== 3) return undefined;
   try {
-    const payload = JSON.parse(Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    const payload = JSON.parse(
+      Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")
+    );
     return payload !== null && typeof payload === "object" && typeof payload.sub === "string"
       ? payload.sub
       : undefined;

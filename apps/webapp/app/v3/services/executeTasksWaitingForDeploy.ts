@@ -1,8 +1,7 @@
-import { PrismaClientOrTransaction } from "~/db.server";
 import { env } from "~/env.server";
 import { logger } from "~/services/logger.server";
-import { commonWorker } from "../commonWorker.server";
 import { marqs } from "~/v3/marqs/index.server";
+import { commonWorker } from "../commonWorker.server";
 import { BaseService } from "./baseService.server";
 
 export class ExecuteTasksWaitingForDeployService extends BaseService {
@@ -39,29 +38,32 @@ export class ExecuteTasksWaitingForDeployService extends BaseService {
 
     const maxCount = env.LEGACY_RUN_ENGINE_WAITING_FOR_DEPLOY_BATCH_SIZE;
 
-    const runsWaitingForDeploy = await this._replica.taskRun.findMany({
-      where: {
-        runtimeEnvironmentId: backgroundWorker.runtimeEnvironmentId,
-        projectId: backgroundWorker.projectId,
-        status: "WAITING_FOR_DEPLOY",
-        taskIdentifier: {
-          in: backgroundWorker.tasks.map((task) => task.slug),
+    const runsWaitingForDeploy = await this.runStore.findRuns(
+      {
+        where: {
+          runtimeEnvironmentId: backgroundWorker.runtimeEnvironmentId,
+          projectId: backgroundWorker.projectId,
+          status: "WAITING_FOR_DEPLOY",
+          taskIdentifier: {
+            in: backgroundWorker.tasks.map((task) => task.slug),
+          },
         },
+        orderBy: {
+          createdAt: "asc",
+        },
+        select: {
+          id: true,
+          status: true,
+          taskIdentifier: true,
+          concurrencyKey: true,
+          queue: true,
+          updatedAt: true,
+          createdAt: true,
+        },
+        take: maxCount + 1,
       },
-      orderBy: {
-        createdAt: "asc",
-      },
-      select: {
-        id: true,
-        status: true,
-        taskIdentifier: true,
-        concurrencyKey: true,
-        queue: true,
-        updatedAt: true,
-        createdAt: true,
-      },
-      take: maxCount + 1,
-    });
+      this._replica
+    );
 
     if (!runsWaitingForDeploy.length) {
       return;

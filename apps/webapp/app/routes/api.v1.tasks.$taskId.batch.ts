@@ -1,9 +1,11 @@
 import type { ActionFunctionArgs } from "@remix-run/server-runtime";
 import { json } from "@remix-run/server-runtime";
-import { BatchTriggerTaskRequestBody, BatchTriggerTaskV2RequestBody } from "@trigger.dev/core/v3";
+import type { BatchTriggerTaskV2RequestBody } from "@trigger.dev/core/v3";
+import { BatchTriggerTaskRequestBody } from "@trigger.dev/core/v3";
 import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
 import { MAX_BATCH_TRIGGER_ITEMS } from "~/consts";
+import { clientSafeErrorMessage } from "~/utils/prismaErrors";
 import { env } from "~/env.server";
 import { authenticateApiRequest } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
@@ -125,7 +127,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     );
   } catch (error) {
     if (error instanceof Error) {
-      return json({ error: error.message }, { status: 400 });
+      return json({ error: clientSafeErrorMessage(error) }, { status: 400 });
     }
 
     return json({ error: "Something went wrong" }, { status: 500 });

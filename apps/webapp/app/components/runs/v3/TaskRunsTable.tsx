@@ -6,11 +6,11 @@ import {
   NoSymbolIcon,
   RectangleStackIcon,
 } from "@heroicons/react/20/solid";
-import { BeakerIcon, BookOpenIcon, CheckIcon } from "@heroicons/react/24/solid";
+import { BookOpenIcon, CheckIcon } from "@heroicons/react/24/solid";
 import { useLocation } from "@remix-run/react";
 import { formatDuration, formatDurationMilliseconds } from "@trigger.dev/core/v3";
 import { useCallback, useRef } from "react";
-import { TaskIconSmall } from "~/assets/icons/TaskIcon";
+import { TasksIcon } from "~/assets/icons/TasksIcon";
 import { MachineLabelCombo } from "~/components/MachineLabelCombo";
 import { MachineTooltipInfo } from "~/components/MachineTooltipInfo";
 import { Badge } from "~/components/primitives/Badge";
@@ -62,6 +62,7 @@ import { TaskTriggerSourceIcon } from "./TaskTriggerSource";
 import { useOptimisticLocation } from "~/hooks/useOptimisticLocation";
 import { useSearchParams } from "~/hooks/useSearchParam";
 import type { TaskTriggerSource } from "@trigger.dev/database";
+import { BeakerIcon } from "~/assets/icons/BeakerIcon";
 
 type RunsTableProps = {
   total: number;
@@ -75,7 +76,17 @@ type RunsTableProps = {
   variant?: TableVariant;
   disableAdjacentRows?: boolean;
   additionalTableState?: Record<string, string>;
+  showTopBorder?: boolean;
+  stickyHeader?: boolean;
   childrenStatusesBasePath?: string;
+  /**
+   * Display-only write:runs flags from the caller's loader. Default true so
+   * callers that don't pass them (and OSS, where the ability is permissive)
+   * keep the controls enabled. The cancel/replay action routes enforce
+   * write:runs regardless.
+   */
+  canCancelRuns?: boolean;
+  canReplayRuns?: boolean;
 };
 
 export function TaskRunsTable({
@@ -89,7 +100,11 @@ export function TaskRunsTable({
   allowSelection = false,
   variant = "dimmed",
   additionalTableState,
+  showTopBorder = true,
+  stickyHeader = false,
   childrenStatusesBasePath,
+  canCancelRuns = true,
+  canReplayRuns = true,
 }: RunsTableProps) {
   const regions = useRegions();
   const regionByMasterQueue = new Map(regions.map((r) => [r.masterQueue, r] as const));
@@ -144,7 +159,12 @@ export function TaskRunsTable({
   );
 
   return (
-    <Table variant={variant} className="max-h-full overflow-y-auto">
+    <Table
+      variant={variant}
+      className="max-h-full overflow-y-auto"
+      showTopBorder={showTopBorder}
+      stickyHeader={stickyHeader}
+    >
       <TableHeader>
         <TableRow>
           {allowSelection && (
@@ -445,28 +465,37 @@ export function TaskRunsTable({
                   <MachineLabelCombo preset={run.machinePreset} />
                 </TableCell>
                 <TableCell to={path}>
-                  <span className="flex items-center gap-1">
-                    {run.queue.type === "task" ? (
-                      <SimpleTooltip
-                        button={<TaskIconSmall className="size-[1.125rem] text-blue-500" />}
-                        content={`This queue was automatically created from your "${run.queue.name}" task`}
-                      />
-                    ) : (
-                      <SimpleTooltip
-                        button={<RectangleStackIcon className="size-[1.125rem] text-purple-500" />}
-                        content={`This is a custom queue you added in your code.`}
-                      />
-                    )}
-                    <span>{run.queue.name}</span>
-                  </span>
+                  {run.queue.type === "task" ? (
+                    <SimpleTooltip
+                      buttonClassName="w-fit"
+                      button={
+                        <span className="flex items-center gap-1">
+                          <TasksIcon className="size-[1.125rem] text-blue-500" />
+                          <span>{run.queue.name}</span>
+                        </span>
+                      }
+                      content={`This queue was automatically created from your "${run.queue.name}" task`}
+                      disableHoverableContent
+                    />
+                  ) : (
+                    <SimpleTooltip
+                      buttonClassName="w-fit"
+                      button={
+                        <span className="flex items-center gap-1">
+                          <RectangleStackIcon className="size-[1.125rem] text-purple-500" />
+                          <span>{run.queue.name}</span>
+                        </span>
+                      }
+                      content={`This is a custom queue you added in your code.`}
+                      disableHoverableContent
+                    />
+                  )}
                 </TableCell>
                 {showRegion && (
                   <TableCell to={path}>
                     {run.region ? (
                       <RegionLabel
-                        region={
-                          regionByMasterQueue.get(run.region) ?? { name: run.region }
-                        }
+                        region={regionByMasterQueue.get(run.region) ?? { name: run.region }}
                         iconClassName="size-4"
                       />
                     ) : (
@@ -493,7 +522,12 @@ export function TaskRunsTable({
                     {run.tags.map((tag) => <RunTag key={tag} tag={tag} />) || "–"}
                   </div>
                 </TableCell>
-                <RunActionsCell run={run} path={path} />
+                <RunActionsCell
+                  run={run}
+                  path={path}
+                  canCancelRuns={canCancelRuns}
+                  canReplayRuns={canReplayRuns}
+                />
               </TableRow>
             );
           })
@@ -511,7 +545,17 @@ export function TaskRunsTable({
   );
 }
 
-function RunActionsCell({ run, path }: { run: NextRunListItem; path: string }) {
+function RunActionsCell({
+  run,
+  path,
+  canCancelRuns,
+  canReplayRuns,
+}: {
+  run: NextRunListItem;
+  path: string;
+  canCancelRuns: boolean;
+  canReplayRuns: boolean;
+}) {
   const location = useLocation();
 
   if (!run.isCancellable && !run.isReplayable) return <TableCell to={path}>{""}</TableCell>;
@@ -527,57 +571,85 @@ function RunActionsCell({ run, path }: { run: NextRunListItem; path: string }) {
             leadingIconClassName="text-blue-500"
             title="View run"
           />
-          {run.isCancellable && (
-            <Dialog>
-              <DialogTrigger
-                asChild
-                className="size-6 rounded-sm p-1 text-text-dimmed transition hover:bg-charcoal-700 hover:text-text-bright"
-              >
-                <Button
-                  variant="small-menu-item"
-                  LeadingIcon={NoSymbolIcon}
-                  leadingIconClassName="text-error"
-                  fullWidth
-                  textAlignLeft
-                  className="w-full px-1.5 py-[0.9rem]"
+          {run.isCancellable &&
+            (canCancelRuns ? (
+              <Dialog>
+                <DialogTrigger
+                  asChild
+                  className="size-6 rounded-sm p-1 text-text-dimmed transition hover:bg-charcoal-700 hover:text-text-bright"
                 >
-                  Cancel run
-                </Button>
-              </DialogTrigger>
-              <CancelRunDialog
-                runFriendlyId={run.friendlyId}
-                redirectPath={`${location.pathname}${location.search}`}
-              />
-            </Dialog>
-          )}
-          {run.isReplayable && (
-            <Dialog>
-              <DialogTrigger
-                asChild
-                className="h-6 w-6 rounded-sm p-1 text-text-dimmed transition hover:bg-charcoal-700 hover:text-text-bright"
+                  <Button
+                    variant="small-menu-item"
+                    LeadingIcon={NoSymbolIcon}
+                    leadingIconClassName="text-error"
+                    fullWidth
+                    textAlignLeft
+                    className="w-full px-1.5 py-[0.9rem]"
+                  >
+                    Cancel run
+                  </Button>
+                </DialogTrigger>
+                <CancelRunDialog
+                  runFriendlyId={run.friendlyId}
+                  redirectPath={`${location.pathname}${location.search}`}
+                />
+              </Dialog>
+            ) : (
+              <Button
+                variant="small-menu-item"
+                LeadingIcon={NoSymbolIcon}
+                leadingIconClassName="text-error"
+                fullWidth
+                textAlignLeft
+                className="w-full px-1.5 py-[0.9rem]"
+                disabled
+                tooltip="You don't have permission to cancel runs"
               >
-                <Button
-                  variant="small-menu-item"
-                  LeadingIcon={ArrowPathIcon}
-                  leadingIconClassName="text-success"
-                  fullWidth
-                  textAlignLeft
-                  className="w-full px-1.5 py-[0.9rem]"
+                Cancel run
+              </Button>
+            ))}
+          {run.isReplayable &&
+            (canReplayRuns ? (
+              <Dialog>
+                <DialogTrigger
+                  asChild
+                  className="h-6 w-6 rounded-sm p-1 text-text-dimmed transition hover:bg-charcoal-700 hover:text-text-bright"
                 >
-                  Replay run…
-                </Button>
-              </DialogTrigger>
-              <ReplayRunDialog
-                runFriendlyId={run.friendlyId}
-                failedRedirect={`${location.pathname}${location.search}`}
-              />
-            </Dialog>
-          )}
+                  <Button
+                    variant="small-menu-item"
+                    LeadingIcon={ArrowPathIcon}
+                    leadingIconClassName="text-success"
+                    fullWidth
+                    textAlignLeft
+                    className="w-full px-1.5 py-[0.9rem]"
+                  >
+                    Replay run…
+                  </Button>
+                </DialogTrigger>
+                <ReplayRunDialog
+                  runFriendlyId={run.friendlyId}
+                  failedRedirect={`${location.pathname}${location.search}`}
+                />
+              </Dialog>
+            ) : (
+              <Button
+                variant="small-menu-item"
+                LeadingIcon={ArrowPathIcon}
+                leadingIconClassName="text-success"
+                fullWidth
+                textAlignLeft
+                className="w-full px-1.5 py-[0.9rem]"
+                disabled
+                tooltip="You don't have permission to replay runs"
+              >
+                Replay run…
+              </Button>
+            ))}
         </>
       }
       hiddenButtons={
         <>
-          {run.isCancellable && (
+          {run.isCancellable && canCancelRuns && (
             <SimpleTooltip
               button={
                 <Dialog>
@@ -598,10 +670,10 @@ function RunActionsCell({ run, path }: { run: NextRunListItem; path: string }) {
               disableHoverableContent
             />
           )}
-          {run.isCancellable && run.isReplayable && (
+          {run.isCancellable && canCancelRuns && run.isReplayable && canReplayRuns && (
             <div className="mx-0.5 h-6 w-px bg-grid-dimmed" />
           )}
-          {run.isReplayable && (
+          {run.isReplayable && canReplayRuns && (
             <SimpleTooltip
               button={
                 <Dialog>
@@ -664,25 +736,6 @@ function BlankState({
         <Paragraph className="w-auto" variant="base/bright" spacing>
           There are no runs for {filters.tasks[0]}
         </Paragraph>
-        <div className="mt-6 flex items-center justify-center gap-2">
-          <LinkButton
-            to={testPath}
-            variant="tertiary/medium"
-            LeadingIcon={BeakerIcon}
-            className="inline-flex"
-          >
-            Create a test run
-          </LinkButton>
-          <Paragraph variant="small">or</Paragraph>
-          <LinkButton
-            to={docsPath("v3/triggering")}
-            variant="tertiary/medium"
-            LeadingIcon={BookOpenIcon}
-            className="inline-flex"
-          >
-            Triggering a task docs
-          </LinkButton>
-        </div>
       </TableBlankRow>
     );
   }
@@ -696,7 +749,7 @@ function BlankState({
         <div className="flex items-center gap-2">
           <Button
             LeadingIcon={ArrowPathIcon}
-            variant="tertiary/medium"
+            variant="secondary/medium"
             onClick={() => {
               window.location.reload();
             }}
@@ -704,7 +757,12 @@ function BlankState({
             Refresh
           </Button>
           <Paragraph>or</Paragraph>
-          <LinkButton LeadingIcon={BeakerIcon} variant="tertiary/medium" to={testPath}>
+          <LinkButton
+            LeadingIcon={BeakerIcon}
+            leadingIconClassName="text-tests"
+            variant="secondary/medium"
+            to={testPath}
+          >
             Run a test
           </LinkButton>
         </div>

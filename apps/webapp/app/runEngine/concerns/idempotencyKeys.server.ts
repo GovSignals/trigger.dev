@@ -10,6 +10,7 @@ import { getMollifierBuffer } from "~/v3/mollifier/mollifierBuffer.server";
 import { findRunByIdWithMollifierFallback } from "~/v3/mollifier/readFallback.server";
 import { claimOrAwait } from "~/v3/mollifier/idempotencyClaim.server";
 import { makeResolveMollifierFlag } from "~/v3/mollifier/mollifierGate.server";
+import { runStore } from "~/v3/runStore.server";
 import type { TraceEventConcern, TriggerTaskRequest } from "../types";
 
 // In-memory per-org mollifier-enabled check, shared with `evaluateGate`
@@ -65,7 +66,7 @@ export class IdempotencyKeyConcern {
     environmentId: string,
     organizationId: string,
     taskIdentifier: string,
-    idempotencyKey: string,
+    idempotencyKey: string
   ): Promise<TaskRun | null> {
     const buffer = getMollifierBuffer();
     if (!buffer) return null;
@@ -110,10 +111,7 @@ export class IdempotencyKeyConcern {
     // accept goes through as a fresh trigger. Mirrors what
     // `ResetIdempotencyKeyService` does for the explicit
     // reset-via-API path.
-    if (
-      synthetic.idempotencyKeyExpiresAt &&
-      synthetic.idempotencyKeyExpiresAt < new Date()
-    ) {
+    if (synthetic.idempotencyKeyExpiresAt && synthetic.idempotencyKeyExpiresAt < new Date()) {
       const buffer = getMollifierBuffer();
       if (buffer) {
         try {
@@ -150,16 +148,19 @@ export class IdempotencyKeyConcern {
     }
 
     const existingRun = idempotencyKey
-      ? await this.prisma.taskRun.findFirst({
-          where: {
+      ? await runStore.findRun(
+          {
             runtimeEnvironmentId: request.environment.id,
             idempotencyKey,
             taskIdentifier: request.taskId,
           },
-          include: {
-            associatedWaitpoint: true,
+          {
+            include: {
+              associatedWaitpoint: true,
+            },
           },
-        })
+          this.prisma
+        )
       : undefined;
 
     // Buffer fallback per the mollifier-idempotency design. PG missed —
@@ -174,7 +175,7 @@ export class IdempotencyKeyConcern {
         request.environment.id,
         request.environment.organizationId,
         request.taskId,
-        idempotencyKey,
+        idempotencyKey
       );
       if (buffered) {
         return { isCached: true, run: buffered };
@@ -190,10 +191,10 @@ export class IdempotencyKeyConcern {
         });
 
         // Update the existing run to remove the idempotency key
-        await this.prisma.taskRun.updateMany({
-          where: { id: existingRun.id, idempotencyKey },
-          data: { idempotencyKey: null, idempotencyKeyExpiresAt: null },
-        });
+        await runStore.clearIdempotencyKey(
+          { byId: { runId: existingRun.id, idempotencyKey } },
+          this.prisma
+        );
 
         return { isCached: false, idempotencyKey, idempotencyKeyExpiresAt };
       }
@@ -207,10 +208,10 @@ export class IdempotencyKeyConcern {
         });
 
         // Update the existing run to remove the idempotency key
-        await this.prisma.taskRun.updateMany({
-          where: { id: existingRun.id, idempotencyKey },
-          data: { idempotencyKey: null, idempotencyKeyExpiresAt: null },
-        });
+        await runStore.clearIdempotencyKey(
+          { byId: { runId: existingRun.id, idempotencyKey } },
+          this.prisma
+        );
 
         return { isCached: false, idempotencyKey, idempotencyKeyExpiresAt };
       }
@@ -303,18 +304,18 @@ export class IdempotencyKeyConcern {
         orgId: request.environment.organizationId,
         taskId: request.taskId,
         orgFeatureFlags:
-          ((request.environment.organization?.featureFlags as
+          (request.environment.organization?.featureFlags as
             | Record<string, unknown>
             | null
-            | undefined) ?? null),
+            | undefined) ?? null,
       }));
     if (claimEligible) {
       const ttlSeconds = Math.max(
         1,
         Math.min(
           env.TRIGGER_MOLLIFIER_CLAIM_TTL_SECONDS,
-          Math.ceil((idempotencyKeyExpiresAt.getTime() - Date.now()) / 1000),
-        ),
+          Math.ceil((idempotencyKeyExpiresAt.getTime() - Date.now()) / 1000)
+        )
       );
       const outcome = await claimOrAwait({
         envId: request.environment.id,
@@ -328,14 +329,15 @@ export class IdempotencyKeyConcern {
         // Another concurrent trigger committed first. Re-resolve via the
         // existing checks: writer-side PG findFirst first (defeats
         // replica lag), then buffer fallback for the buffered case.
-        const writerRun = await this.prisma.taskRun.findFirst({
-          where: {
+        const writerRun = await runStore.findRun(
+          {
             runtimeEnvironmentId: request.environment.id,
             idempotencyKey,
             taskIdentifier: request.taskId,
           },
-          include: { associatedWaitpoint: true },
-        });
+          { include: { associatedWaitpoint: true } },
+          this.prisma
+        );
         if (writerRun) {
           return { isCached: true, run: writerRun };
         }
@@ -343,7 +345,7 @@ export class IdempotencyKeyConcern {
           request.environment.id,
           request.environment.organizationId,
           request.taskId,
-          idempotencyKey,
+          idempotencyKey
         );
         if (buffered) {
           return { isCached: true, run: buffered };
@@ -376,10 +378,7 @@ export class IdempotencyKeyConcern {
         });
       }
       if (outcome.kind === "timed_out") {
-        throw new ServiceValidationError(
-          "Idempotency claim resolution timed out",
-          503,
-        );
+        throw new ServiceValidationError("Idempotency claim resolution timed out", 503);
       }
       if (outcome.kind === "claimed") {
         // Caller MUST publish/release. Signalled via the result's

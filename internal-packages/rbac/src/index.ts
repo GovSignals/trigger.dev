@@ -11,6 +11,15 @@ import type {
 import type { PrismaClient } from "@trigger.dev/database";
 import { RoleBaseAccessFallback } from "./fallback.js";
 export type { RoleBaseAccessController, RbacAbility, RbacResource } from "@trigger.dev/plugins";
+export type { UserActorAuthResult, UserActorClaims } from "@trigger.dev/plugins";
+// Re-export the user-actor token grammar so the webapp mints/checks tokens
+// through @trigger.dev/rbac (it doesn't import @trigger.dev/plugins directly).
+export {
+  isUserActorToken,
+  signUserActorToken,
+  verifyUserActorToken,
+  USER_ACTOR_TOKEN_PREFIX,
+} from "@trigger.dev/plugins";
 
 // Either a single PrismaClient (used for both writes and reads — fine
 // for callers that don't have a separate replica), or `{primary, replica}`
@@ -21,6 +30,9 @@ export type RbacPrismaInput = PrismaClient | { primary: PrismaClient; replica: P
 export type RbacCreateOptions = {
   // When true, skip loading the plugin, useful for tests
   forceFallback?: boolean;
+  // Platform secret used to verify delegated user-actor tokens (tr_uat_).
+  // Threaded through to the plugin / fallback's authenticateUserActor.
+  userActorSecret?: string;
 };
 
 // Route actions that historically authorised via the legacy checkAuthorization's
@@ -67,14 +79,16 @@ class LazyController implements RoleBaseAccessController {
     options?: RbacCreateOptions
   ): Promise<RoleBaseAccessController> {
     if (options?.forceFallback) {
-      return new RoleBaseAccessFallback(prisma).create();
+      return new RoleBaseAccessFallback(prisma, {
+        userActorSecret: options?.userActorSecret,
+      }).create();
     }
     const moduleName = "@triggerdotdev/plugins/rbac";
     try {
       const module = await import(moduleName);
       const plugin: RoleBasedAccessControlPlugin = module.default;
       console.log("RBAC: using plugin implementation");
-      return plugin.create();
+      return plugin.create({ userActorSecret: options?.userActorSecret });
     } catch (err) {
       // The dynamic import either succeeded or failed for one of two
       // distinct reasons. Distinguishing them is critical for debugging
@@ -94,10 +108,8 @@ class LazyController implements RoleBaseAccessController {
       // specifier in the error message is the plugin's own moduleName.
       const code = (err as NodeJS.ErrnoException | undefined)?.code;
       const message = err instanceof Error ? err.message : String(err);
-      const isModuleNotFound =
-        code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND";
-      const isPluginItselfMissing =
-        isModuleNotFound && message.includes(moduleName);
+      const isModuleNotFound = code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND";
+      const isPluginItselfMissing = isModuleNotFound && message.includes(moduleName);
 
       if (!isPluginItselfMissing) {
         // Either the error wasn't a missing-module error at all, or the
@@ -108,9 +120,7 @@ class LazyController implements RoleBaseAccessController {
           err
         );
       } else if (process.env.RBAC_LOG_FALLBACK === "1") {
-        console.log(
-          "RBAC: no plugin installed (ERR_MODULE_NOT_FOUND); using fallback"
-        );
+        console.log("RBAC: no plugin installed (ERR_MODULE_NOT_FOUND); using fallback");
       }
 
       // Fail-fast for deployments that require plugins to be present. Set
@@ -121,12 +131,12 @@ class LazyController implements RoleBaseAccessController {
       // rolled back. Self-hosters leave REQUIRE_PLUGINS unset and continue
       // to use the fallback when no plugin is installed.
       if (process.env.REQUIRE_PLUGINS === "1") {
-        throw new Error(
-          `REQUIRE_PLUGINS=1 but plugin "${moduleName}" did not load: ${message}`
-        );
+        throw new Error(`REQUIRE_PLUGINS=1 but plugin "${moduleName}" did not load: ${message}`);
       }
 
-      return new RoleBaseAccessFallback(prisma).create();
+      return new RoleBaseAccessFallback(prisma, {
+        userActorSecret: options?.userActorSecret,
+      }).create();
     }
   }
 
@@ -179,6 +189,13 @@ class LazyController implements RoleBaseAccessController {
 
   async authenticatePat(...args: Parameters<RoleBaseAccessController["authenticatePat"]>) {
     const result = await (await this.c()).authenticatePat(...args);
+    return result.ok ? { ...result, ability: withActionAliases(result.ability) } : result;
+  }
+
+  async authenticateUserActor(
+    ...args: Parameters<RoleBaseAccessController["authenticateUserActor"]>
+  ) {
+    const result = await (await this.c()).authenticateUserActor(...args);
     return result.ok ? { ...result, ability: withActionAliases(result.ability) } : result;
   }
 
@@ -266,10 +283,7 @@ class LazyController implements RoleBaseAccessController {
 class RoleBaseAccess {
   // Synchronous — returns a lazy controller that resolves any installed
   // plugin on first call.
-  create(
-    prisma: RbacPrismaInput,
-    options?: RbacCreateOptions
-  ): RoleBaseAccessController {
+  create(prisma: RbacPrismaInput, options?: RbacCreateOptions): RoleBaseAccessController {
     return new LazyController(prisma, options);
   }
 }

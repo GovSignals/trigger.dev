@@ -1,7 +1,8 @@
 import type { Session, TaskRunStatus } from "@trigger.dev/database";
 import { SessionTriggerConfig as SessionTriggerConfigZod } from "@trigger.dev/core/v3";
-import { z } from "zod";
+import type { z } from "zod";
 import { prisma, $replica } from "~/db.server";
+import { runStore } from "~/v3/runStore.server";
 import type { AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
 import { CancelTaskRunService } from "~/v3/services/cancelTaskRun.server";
@@ -50,12 +51,7 @@ type EnsureRunForSessionParams = {
    */
   session: Pick<
     Session,
-    | "id"
-    | "friendlyId"
-    | "taskIdentifier"
-    | "triggerConfig"
-    | "currentRunId"
-    | "currentRunVersion"
+    "id" | "friendlyId" | "taskIdentifier" | "triggerConfig" | "currentRunId" | "currentRunVersion"
   >;
   environment: AuthenticatedEnvironment;
   reason: EnsureRunReason;
@@ -119,10 +115,11 @@ export async function ensureRunForSession(
       // replica as "row vanished" double-triggers the session (a fast
       // first append after session create races the replica apply delay
       // and spawns a second live run consuming the same `.in`).
-      probe = await prisma.taskRun.findFirst({
-        where: { id: session.currentRunId },
-        select: { status: true, friendlyId: true },
-      });
+      probe = await runStore.findRun(
+        { id: session.currentRunId },
+        { select: { status: true, friendlyId: true } },
+        prisma
+      );
     }
     if (probe && !isFinalRunStatus(probe.status)) {
       return { runId: session.currentRunId, triggered: false };
@@ -251,10 +248,11 @@ export async function ensureRunForSession(
     // just wrote `currentRunId` on the writer, so probe the writer too —
     // the replica may not have the run row yet, and a missed probe forces
     // another trigger+recurse until `ENSURE_RUN_FOR_SESSION_MAX_ATTEMPTS`.
-    const probe = await prisma.taskRun.findFirst({
-      where: { id: fresh.currentRunId },
-      select: { status: true, friendlyId: true },
-    });
+    const probe = await runStore.findRun(
+      { id: fresh.currentRunId },
+      { select: { status: true, friendlyId: true } },
+      prisma
+    );
     if (probe && !isFinalRunStatus(probe.status)) {
       return { runId: fresh.currentRunId, triggered: false };
     }
@@ -332,12 +330,7 @@ type SwapSessionRunParams = {
    */
   session: Pick<
     Session,
-    | "id"
-    | "friendlyId"
-    | "taskIdentifier"
-    | "triggerConfig"
-    | "currentRunId"
-    | "currentRunVersion"
+    "id" | "friendlyId" | "taskIdentifier" | "triggerConfig" | "currentRunId" | "currentRunVersion"
   >;
   /**
    * The run requesting the swap. Optimistic claim requires
@@ -379,9 +372,7 @@ export type SwapSessionRunResult = {
  * a parallel append-time probe that already swapped to a different
  * run wins the race and `swapped: false` is surfaced.
  */
-export async function swapSessionRun(
-  params: SwapSessionRunParams
-): Promise<SwapSessionRunResult> {
+export async function swapSessionRun(params: SwapSessionRunParams): Promise<SwapSessionRunResult> {
   const { session, callingRunId, environment, reason, payloadOverrides } = params;
 
   // `callingRunId` is the internal cuid (`Session.currentRunId` stores
@@ -494,10 +485,11 @@ async function getRunStatusAndFriendlyId(
   // `payload.previousRunId` without a second read. `Session.currentRunId`
   // stores the internal cuid; the agent's wire / customer hooks expose
   // the friendlyId via `ctx.run.id`, so consistency matters.
-  const row = await $replica.taskRun.findFirst({
-    where: { id: runId },
-    select: { status: true, friendlyId: true },
-  });
+  const row = await runStore.findRun(
+    { id: runId },
+    { select: { status: true, friendlyId: true } },
+    $replica
+  );
   return row ?? null;
 }
 
@@ -511,10 +503,7 @@ async function getRunStatusAndFriendlyId(
  * acceptable degraded behavior.
  */
 async function resolveRunFriendlyId(runId: string): Promise<string> {
-  const row = await $replica.taskRun.findFirst({
-    where: { id: runId },
-    select: { friendlyId: true },
-  });
+  const row = await runStore.findRun({ id: runId }, { select: { friendlyId: true } }, $replica);
   return row?.friendlyId ?? runId;
 }
 
@@ -526,7 +515,7 @@ async function cancelLostRaceRun(
   // Read-after-write: the run was just triggered on the writer, so go
   // through `prisma`. A `$replica` miss here would silently no-op the
   // cancel and leak an orphan run that no session is going to claim.
-  const run = await prisma.taskRun.findFirst({ where: { id: runId } });
+  const run = await runStore.findRun({ id: runId }, prisma);
   if (!run) return;
   await service.call(run, { reason: "Lost session-run claim race" });
 }

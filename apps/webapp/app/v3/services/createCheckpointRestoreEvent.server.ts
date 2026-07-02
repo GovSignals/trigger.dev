@@ -1,13 +1,13 @@
+import { ManualCheckpointMetadata } from "@trigger.dev/core/v3";
 import type {
   Checkpoint,
   CheckpointRestoreEvent,
   CheckpointRestoreEventType,
 } from "@trigger.dev/database";
+import { isTaskRunAttemptStatus, isTaskRunStatus } from "~/database-types";
 import { logger } from "~/services/logger.server";
-import { BaseService } from "./baseService.server";
-import { ManualCheckpointMetadata } from "@trigger.dev/core/v3";
-import { isTaskRunAttemptStatus, isTaskRunStatus, TaskRunAttemptStatus } from "~/database-types";
 import { safeJsonParse } from "~/utils/json";
+import { BaseService } from "./baseService.server";
 
 interface CheckpointRestoreEventCallParams {
   checkpointId: string;
@@ -58,19 +58,22 @@ export class CreateCheckpointRestoreEventService extends BaseService {
     let taskRunDependencyId: string | undefined;
 
     if (params.dependencyFriendlyRunId) {
-      const run = await this._prisma.taskRun.findFirst({
-        where: {
+      const run = await this.runStore.findRun(
+        {
           friendlyId: params.dependencyFriendlyRunId,
         },
-        select: {
-          id: true,
-          dependency: {
-            select: {
-              id: true,
+        {
+          select: {
+            id: true,
+            dependency: {
+              select: {
+                id: true,
+              },
             },
           },
         },
-      });
+        this._prisma
+      );
 
       taskRunDependencyId = run?.dependency?.id;
 

@@ -1,6 +1,7 @@
-import { LoaderFunctionArgs } from "@remix-run/server-runtime";
+import type { LoaderFunctionArgs } from "@remix-run/server-runtime";
 import { prisma } from "~/db.server";
 import { env } from "~/env.server";
+import { runStore } from "~/v3/runStore.server";
 import { requireUser } from "~/services/session.server";
 import { v3RunParamsSchema, v3RunPath } from "~/utils/pathBuilder";
 import { createGzip } from "zlib";
@@ -26,8 +27,8 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
   const showDebug = url.searchParams.get("showDebug") === "true" && user.admin;
   const filename = `${parsedParams.runParam}.${format.extension}`;
 
-  const run = await prisma.taskRun.findFirst({
-    where: {
+  const run = await runStore.findRun(
+    {
       friendlyId: parsedParams.runParam,
       project: {
         organization: {
@@ -39,19 +40,22 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
         },
       },
     },
-    select: {
-      friendlyId: true,
-      traceId: true,
-      organizationId: true,
-      runtimeEnvironmentId: true,
-      createdAt: true,
-      completedAt: true,
-      taskEventStore: true,
-      taskIdentifier: true,
-      project: { select: { slug: true, organization: { select: { slug: true } } } },
-      runtimeEnvironment: { select: { slug: true } },
+    {
+      select: {
+        friendlyId: true,
+        traceId: true,
+        organizationId: true,
+        runtimeEnvironmentId: true,
+        createdAt: true,
+        completedAt: true,
+        taskEventStore: true,
+        taskIdentifier: true,
+        project: { select: { slug: true, organization: { select: { slug: true } } } },
+        runtimeEnvironment: { select: { slug: true } },
+      },
     },
-  });
+    prisma
+  );
 
   if (!run || !run.organizationId) {
     // Buffered run? It hasn't executed, so there's no trace to stream — but a
@@ -79,10 +83,7 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
     return new Response("Not found", { status: 404 });
   }
 
-  const eventRepository = await getEventRepositoryForStore(
-    run.taskEventStore,
-    run.organizationId
-  );
+  const eventRepository = await getEventRepositoryForStore(run.taskEventStore, run.organizationId);
 
   // Stream the trace straight from the store to the gzip response, one event at
   // a time, never materialising the full set or building a tree. This keeps the

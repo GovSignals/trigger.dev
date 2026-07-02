@@ -1,12 +1,8 @@
-import { parse } from "@conform-to/zod";
+import { parseWithZod } from "@conform-to/zod";
 import { BellAlertIcon } from "@heroicons/react/20/solid";
 import { type MetaFunction, useFetcher, useRevalidator } from "@remix-run/react";
 import { type ActionFunctionArgs, json, type LoaderFunctionArgs } from "@remix-run/server-runtime";
-import {
-  IconAlarmSnooze as IconAlarmSnoozeBase,
-  IconBugFilled,
-  IconCircleDotted,
-} from "@tabler/icons-react";
+import { IconAlarmSnooze as IconAlarmSnoozeBase, IconCircleDotted } from "@tabler/icons-react";
 import { ErrorId } from "@trigger.dev/core/v3/isomorphic";
 import { isPast } from "date-fns";
 import { AnimatePresence, motion } from "framer-motion";
@@ -23,6 +19,7 @@ import {
 } from "recharts";
 import { TypedAwait, typeddefer, useTypedLoaderData } from "remix-typedjson";
 import { z } from "zod";
+import { BugIcon } from "~/assets/icons/BugIcon";
 import { ListCheckedIcon } from "~/assets/icons/ListCheckedIcon";
 import { RunsIcon } from "~/assets/icons/RunsIcon";
 import { CodeBlock } from "~/components/code/CodeBlock";
@@ -36,6 +33,7 @@ import { PageBody } from "~/components/layout/AppLayout";
 import { DirectionSchema, ListPagination } from "~/components/ListPagination";
 import { LogsVersionFilter } from "~/components/logs/LogsVersionFilter";
 import { LinkButton } from "~/components/primitives/Buttons";
+import { PermissionLink } from "~/components/primitives/PermissionLink";
 import { Callout } from "~/components/primitives/Callout";
 import { CopyableText } from "~/components/primitives/CopyableText";
 import { DateTime, RelativeDateTime } from "~/components/primitives/DateTime";
@@ -74,6 +72,8 @@ import {
 import { type NextRunList } from "~/presenters/v3/NextRunListPresenter.server";
 import { clickhouseFactory } from "~/services/clickhouse/clickhouseFactoryInstance.server";
 import { requireUser, requireUserId } from "~/services/session.server";
+import { rbac } from "~/services/rbac.server";
+import { checkPermissions } from "~/services/routeBuilders/permissions.server";
 import { cn } from "~/utils/cn";
 import {
   EnvironmentParamSchema,
@@ -137,10 +137,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   const formData = await request.formData();
-  const submission = parse(formData, { schema: actionSchema });
+  const submission = parseWithZod(formData, { schema: actionSchema });
 
-  if (!submission.value) {
-    return json(submission);
+  if (submission.status !== "success") {
+    return json(submission.reply());
   }
 
   const actions = new ErrorGroupActions();
@@ -282,6 +282,19 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     )
     .catch(() => ({ data: [] as ErrorGroupActivity, versions: [] as string[] }));
 
+  // Display flags for the row-menu and bulk-replay controls — the cancel/
+  // replay action routes enforce write:runs independently. Permissive in OSS.
+  const runAuth = await rbac.authenticateSession(request, {
+    userId,
+    organizationId: project.organizationId,
+  });
+  const runPermissions = runAuth.ok
+    ? checkPermissions(runAuth.ability, {
+        canCancelRuns: { action: "write", resource: { type: "runs" } },
+        canReplayRuns: { action: "write", resource: { type: "runs" } },
+      })
+    : { canCancelRuns: true, canReplayRuns: true };
+
   return typeddefer({
     data: detailPromise,
     activity: activityPromise,
@@ -289,12 +302,21 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     projectParam,
     envParam,
     fingerprint,
+    ...runPermissions,
   });
 };
 
 export default function Page() {
-  const { data, activity, organizationSlug, projectParam, envParam, fingerprint } =
-    useTypedLoaderData<typeof loader>();
+  const {
+    data,
+    activity,
+    organizationSlug,
+    projectParam,
+    envParam,
+    fingerprint,
+    canCancelRuns,
+    canReplayRuns,
+  } = useTypedLoaderData<typeof loader>();
 
   const location = useOptimisticLocation();
   const searchParams = new URLSearchParams(location.search);
@@ -387,6 +409,8 @@ export default function Page() {
                   projectParam={projectParam}
                   envParam={envParam}
                   fingerprint={fingerprint}
+                  canCancelRuns={canCancelRuns}
+                  canReplayRuns={canReplayRuns}
                 />
               );
             }}
@@ -405,6 +429,8 @@ function ErrorGroupDetail({
   projectParam,
   envParam,
   fingerprint,
+  canCancelRuns,
+  canReplayRuns,
 }: {
   errorGroup: ErrorGroupSummary | undefined;
   runList: NextRunList | undefined;
@@ -413,6 +439,8 @@ function ErrorGroupDetail({
   projectParam: string;
   envParam: string;
   fingerprint: string;
+  canCancelRuns: boolean;
+  canReplayRuns: boolean;
 }) {
   const { value, values } = useSearchParams();
   const organization = useOrganization();
@@ -482,7 +510,9 @@ function ErrorGroupDetail({
                   >
                     View all runs
                   </LinkButton>
-                  <LinkButton
+                  <PermissionLink
+                    hasPermission={canReplayRuns}
+                    noPermissionTooltip="You don't have permission to replay runs"
                     variant="secondary/small"
                     to={v3CreateBulkActionPath(
                       organization,
@@ -495,7 +525,7 @@ function ErrorGroupDetail({
                     LeadingIcon={ListCheckedIcon}
                   >
                     Bulk replay…
-                  </LinkButton>
+                  </PermissionLink>
                   <ListPagination list={runList} />
                 </div>
               )}
@@ -515,10 +545,12 @@ function ErrorGroupDetail({
                 isLoading={false}
                 variant="dimmed"
                 additionalTableState={{ errorId: ErrorId.toFriendlyId(fingerprint) }}
+                canCancelRuns={canCancelRuns}
+                canReplayRuns={canReplayRuns}
               />
             ) : (
               <div className="flex flex-1 flex-col items-center justify-center gap-3">
-                <IconBugFilled className="size-16 text-charcoal-650" />
+                <BugIcon className="size-16 text-charcoal-650" />
                 <Paragraph className="max-w-32 text-center text-text-dimmed">
                   No runs found for this error.
                 </Paragraph>

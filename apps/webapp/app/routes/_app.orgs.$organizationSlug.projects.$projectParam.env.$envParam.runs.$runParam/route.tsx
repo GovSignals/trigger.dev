@@ -6,7 +6,6 @@ import {
   ChevronRightIcon,
   InformationCircleIcon,
   LockOpenIcon,
-  MagnifyingGlassIcon,
   MagnifyingGlassMinusIcon,
   MagnifyingGlassPlusIcon,
   StopCircleIcon,
@@ -37,12 +36,13 @@ import { AdminDebugTooltip } from "~/components/admin/debugTooltip";
 import { PageBody } from "~/components/layout/AppLayout";
 import { Badge } from "~/components/primitives/Badge";
 import { Button, LinkButton } from "~/components/primitives/Buttons";
+import { Callout } from "~/components/primitives/Callout";
 import { CopyableText } from "~/components/primitives/CopyableText";
 import { DateTimeShort } from "~/components/primitives/DateTime";
 import { Dialog, DialogTrigger } from "~/components/primitives/Dialog";
 import { Header3 } from "~/components/primitives/Headers";
 import { InfoPanel } from "~/components/primitives/InfoPanel";
-import { Input } from "~/components/primitives/Input";
+import { SearchInput } from "~/components/primitives/SearchInput";
 import { NavBar, PageAccessories, PageTitle } from "~/components/primitives/PageHeader";
 import { Paragraph } from "~/components/primitives/Paragraph";
 import { Popover, PopoverArrowTrigger, PopoverContent } from "~/components/primitives/Popover";
@@ -105,6 +105,7 @@ import { getImpersonationId } from "~/services/impersonation.server";
 import { logger } from "~/services/logger.server";
 import { getResizableSnapshot } from "~/services/resizablePanel.server";
 import { requireUserId } from "~/services/session.server";
+import { rbac } from "~/services/rbac.server";
 import { cn } from "~/utils/cn";
 import { lerp } from "~/utils/lerp";
 import {
@@ -190,7 +191,10 @@ async function getRunsListFromTableState({
       return null;
     }
 
-    const clickhouse = await clickhouseFactory.getClickhouseForOrganization(project.organizationId, "standard");
+    const clickhouse = await clickhouseFactory.getClickhouseForOrganization(
+      project.organizationId,
+      "standard"
+    );
     const runsListPresenter = new NextRunListPresenter($replica, clickhouse);
     const currentPageResult = await runsListPresenter.call(project.organizationId, environment.id, {
       userId,
@@ -252,6 +256,15 @@ async function getRunsListFromTableState({
     logger.error("Error loading runs list from tableState:", { error });
     return null;
   }
+}
+
+// Display-only write:runs flags for the Replay/Cancel controls. The cancel
+// and replay action routes enforce write:runs independently; this mirrors the
+// result so the buttons disable for roles that lack it. Permissive in OSS.
+async function runWritePermissions(request: Request, userId: string, organizationId: string) {
+  const auth = await rbac.authenticateSession(request, { userId, organizationId });
+  const canWriteRun = auth.ok ? auth.ability.can("write", { type: "runs" }) : true;
+  return { canReplayRun: canWriteRun, canCancelRun: canWriteRun };
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
@@ -319,11 +332,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       // Skip on `_data` requests (Remix data fetches): they're
       // client-driven follow-ups and the client URL is what matters,
       // not the loader's view of it.
-      if (
-        !url.searchParams.has("span") &&
-        !url.searchParams.has("_data") &&
-        buffered.run.spanId
-      ) {
+      if (!url.searchParams.has("span") && !url.searchParams.has("_data") && buffered.run.spanId) {
         url.searchParams.set("span", buffered.run.spanId);
         throw redirect(url.pathname + "?" + url.searchParams.toString());
       }
@@ -337,6 +346,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         maximumLiveReloadingSetting: env.MAXIMUM_LIVE_RELOADING_EVENTS,
         resizable: { parent, tree },
         runsList: null,
+        ...(await runWritePermissions(request, userId, buffered.run.environment.organizationId)),
       });
     }
 
@@ -348,11 +358,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   // block in the buffered fallback above — the sibling redirect routes
   // do this, but direct navigation to the canonical project-scoped URL
   // never hits them, leaving the right detail panel collapsed.
-  if (
-    !url.searchParams.has("span") &&
-    !url.searchParams.has("_data") &&
-    result.run.spanId
-  ) {
+  if (!url.searchParams.has("span") && !url.searchParams.has("_data") && result.run.spanId) {
     url.searchParams.set("span", result.run.spanId);
     throw redirect(url.pathname + "?" + url.searchParams.toString());
   }
@@ -379,6 +385,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       tree,
     },
     runsList,
+    ...(await runWritePermissions(request, userId, result.run.environment.organizationId)),
   });
 };
 
@@ -418,8 +425,15 @@ async function tryMollifiedRunFallback(args: {
 type LoaderData = SerializeFrom<typeof loader>;
 
 export default function Page() {
-  const { run, trace, maximumLiveReloadingSetting, runsList, resizable } =
-    useLoaderData<typeof loader>();
+  const {
+    run,
+    trace,
+    maximumLiveReloadingSetting,
+    runsList,
+    resizable,
+    canReplayRun,
+    canCancelRun,
+  } = useLoaderData<typeof loader>();
   const organization = useOrganization();
   const project = useProject();
   const environment = useEnvironment();
@@ -501,6 +515,8 @@ export default function Page() {
                 LeadingIcon={ArrowUturnLeftIcon}
                 shortcut={{ key: "R" }}
                 className="pr-2"
+                disabled={!canReplayRun}
+                tooltip={canReplayRun ? undefined : "You don't have permission to replay runs"}
               >
                 Replay run
               </Button>
@@ -519,6 +535,7 @@ export default function Page() {
           {run.isFinished ? null : (
             <ControlledCancelRunDialog
               key={`cancel-${run.friendlyId}`}
+              canCancel={canCancelRun}
               runFriendlyId={run.friendlyId}
               redirectPath={v3RunSpanPath(
                 organization,
@@ -583,8 +600,16 @@ function TraceView({
     return <></>;
   }
 
-  const { events, duration, rootSpanStatus, rootStartedAt, queuedDuration, overridesBySpanId } =
-    trace;
+  const {
+    events,
+    duration,
+    rootSpanStatus,
+    rootStartedAt,
+    queuedDuration,
+    overridesBySpanId,
+    isTruncated = false,
+    missingAnchor = false,
+  } = trace;
 
   const changeToSpan = useDebounce((selectedSpan: string) => {
     replaceSearchParam("span", selectedSpan, { replace: true });
@@ -617,7 +642,8 @@ function TraceView({
     ? linkedRunIdBySpanId?.[selectedSpanId]
     : undefined;
   const frozenLinkedRunId = useFrozenValue(selectedSpanLinkedRunId);
-  const displayLinkedRunId = (selectedSpanId ? selectedSpanLinkedRunId : frozenLinkedRunId) ?? undefined;
+  const displayLinkedRunId =
+    (selectedSpanId ? selectedSpanLinkedRunId : frozenLinkedRunId) ?? undefined;
 
   return (
     <div className={cn("grid h-full max-h-full grid-cols-1 overflow-hidden")}>
@@ -630,31 +656,44 @@ function TraceView({
           id={resizableSettings.parent.main.id}
           min={resizableSettings.parent.main.min}
         >
-          <TasksTreeView
-            selectedId={selectedSpanId}
-            key={events[0]?.id ?? "-"}
-            events={events}
-            onSelectedIdChanged={(selectedSpan) => {
-              //instantly close the panel if no span is selected
-              if (!selectedSpan) {
-                replaceSearchParam("span");
-                return;
-              }
+          <div className="flex h-full flex-col overflow-hidden">
+            {isTruncated && (
+              <div className="shrink-0 border-b border-charcoal-700 px-3 py-2">
+                <Callout variant="warning" className="text-sm">
+                  {missingAnchor
+                    ? "Trace too large to display completely."
+                    : "This run's trace is partially displayed because it exceeds the view limit."}
+                </Callout>
+              </div>
+            )}
+            <div className="min-h-0 flex-1">
+              <TasksTreeView
+                selectedId={selectedSpanId}
+                key={events[0]?.id ?? "-"}
+                events={events}
+                onSelectedIdChanged={(selectedSpan) => {
+                  //instantly close the panel if no span is selected
+                  if (!selectedSpan) {
+                    replaceSearchParam("span");
+                    return;
+                  }
 
-              changeToSpan(selectedSpan);
-            }}
-            totalDuration={duration}
-            rootSpanStatus={rootSpanStatus}
-            rootStartedAt={rootStartedAt ? new Date(rootStartedAt) : undefined}
-            queuedDuration={queuedDuration}
-            environmentType={run.environment.type}
-            shouldLiveReload={isLiveReloading}
-            maximumLiveReloadingSetting={maximumLiveReloadingSetting}
-            rootRun={run.rootTaskRun}
-            parentRun={run.parentTaskRun}
-            isCompleted={run.completedAt !== null}
-            treeSnapshot={resizable.tree as ResizableSnapshot}
-          />
+                  changeToSpan(selectedSpan);
+                }}
+                totalDuration={duration}
+                rootSpanStatus={rootSpanStatus}
+                rootStartedAt={rootStartedAt ? new Date(rootStartedAt) : undefined}
+                queuedDuration={queuedDuration}
+                environmentType={run.environment.type}
+                shouldLiveReload={isLiveReloading}
+                maximumLiveReloadingSetting={maximumLiveReloadingSetting}
+                rootRun={run.rootTaskRun}
+                parentRun={run.parentTaskRun}
+                isCompleted={run.completedAt !== null}
+                treeSnapshot={resizable.tree as ResizableSnapshot}
+              />
+            </div>
+          </div>
         </ResizablePanel>
         <ResizableHandle
           id={resizableSettings.parent.handleId}
@@ -699,15 +738,23 @@ function TraceView({
 function ControlledCancelRunDialog({
   runFriendlyId,
   redirectPath,
+  canCancel,
 }: {
   runFriendlyId: string;
   redirectPath: string;
+  canCancel: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="danger/small" LeadingIcon={StopCircleIcon} shortcut={{ key: "C" }}>
+        <Button
+          variant="danger/small"
+          LeadingIcon={StopCircleIcon}
+          shortcut={{ key: "C" }}
+          disabled={!canCancel}
+          tooltip={canCancel ? undefined : "You don't have permission to cancel runs"}
+        >
           Cancel run…
         </Button>
       </DialogTrigger>
@@ -908,34 +955,36 @@ function TasksTreeView({
 
   return (
     <div className="grid h-full grid-rows-[2.5rem_1fr_3.25rem] overflow-hidden">
-      <div className="flex items-center justify-between gap-2 border-b border-grid-dimmed px-2">
+      <div className="flex items-center justify-between gap-2 border-b border-grid-dimmed px-1.5">
         <SearchField onChange={setFilterText} />
-        {isAdmin && (
+        <div className="flex items-center gap-1.5">
+          {isAdmin && (
+            <Switch
+              variant="secondary/small"
+              label="Debug"
+              shortcut={{ modifiers: ["shift"], key: "D" }}
+              checked={showDebug}
+              onCheckedChange={(checked) => {
+                replace({
+                  showDebug: checked ? "true" : "false",
+                });
+              }}
+            />
+          )}
           <Switch
-            variant="small"
-            label="Debug"
-            shortcut={{ modifiers: ["shift"], key: "D" }}
-            checked={showDebug}
-            onCheckedChange={(checked) => {
-              replace({
-                showDebug: checked ? "true" : "false",
-              });
-            }}
+            variant="secondary/small"
+            label="Queue time"
+            checked={showQueueTime}
+            onCheckedChange={(e) => setShowQueueTime(e.valueOf())}
+            shortcut={{ key: "Q" }}
           />
-        )}
-        <Switch
-          variant="small"
-          label="Queue time"
-          checked={showQueueTime}
-          onCheckedChange={(e) => setShowQueueTime(e.valueOf())}
-          shortcut={{ key: "Q" }}
-        />
-        <Switch
-          variant="small"
-          label="Errors only"
-          checked={errorsOnly}
-          onCheckedChange={(e) => setErrorsOnly(e.valueOf())}
-        />
+          <Switch
+            variant="secondary/small"
+            label="Errors only"
+            checked={errorsOnly}
+            onCheckedChange={(e) => setErrorsOnly(e.valueOf())}
+          />
+        </div>
       </div>
       <ResizablePanelGroup autosaveId={resizableSettings.tree.autosaveId} snapshot={treeSnapshot}>
         {/* Tree list */}
@@ -990,7 +1039,7 @@ function TasksTreeView({
                 <>
                   <div
                     className={cn(
-                      "flex h-8 cursor-pointer items-center overflow-hidden rounded-l-sm pr-2",
+                      "group/spannode flex h-8 cursor-pointer items-center overflow-hidden rounded-l-sm pr-2",
                       state.selected
                         ? "bg-grid-dimmed hover:bg-grid-bright"
                         : "bg-transparent hover:bg-grid-dimmed"
@@ -1041,7 +1090,13 @@ function TasksTreeView({
                     <div className="flex w-full items-center justify-between gap-2 pl-1">
                       <div className="flex items-center gap-1.5 overflow-x-hidden">
                         <RunIcon
-                          name={node.data.style?.icon}
+                          name={
+                            node.data.isAgentRun &&
+                            (node.data.style?.icon === "task" ||
+                              node.data.style?.icon === "task-cached")
+                              ? "agent"
+                              : node.data.style?.icon
+                          }
                           spanName={node.data.message}
                           className="size-5 min-h-5 min-w-5"
                         />
@@ -1236,8 +1291,8 @@ function TimelineView({
                             index === 0
                               ? "ml-1"
                               : index === tickCount - 1
-                              ? "-ml-1 -translate-x-full"
-                              : "-translate-x-1/2"
+                                ? "-ml-1 -translate-x-full"
+                                : "-translate-x-1/2"
                           )}
                         >
                           {formatDurationMilliseconds(ms, {
@@ -1463,9 +1518,15 @@ function queueAdjustedNs(timeNs: number, queuedDurationNs: number | undefined) {
 
 function NodeText({ node }: { node: TraceEvent }) {
   const className = "truncate";
+  // Only mark task-level spans as agent so the agents colour applies to
+  // the task row itself, not unrelated sub-spans (wait/log/etc.) that
+  // live underneath an agent run.
+  const isAgentTaskRow =
+    node.data.isAgentRun &&
+    (node.data.style?.icon === "task" || node.data.style?.icon === "task-cached");
   return (
     <Paragraph variant="small" className={cn(className)}>
-      <SpanTitle {...node.data} size="small" />
+      <SpanTitle {...node.data} size="small" isAgentRun={isAgentTaskRow} />
     </Paragraph>
   );
 }
@@ -1882,21 +1943,12 @@ function SearchField({ onChange }: { onChange: (value: string) => void }) {
     onChange(text);
   }, 250);
 
-  const updateValue = useCallback((value: string) => {
-    setValue(value);
-    updateFilterText(value);
+  const updateValue = useCallback((next: string) => {
+    setValue(next);
+    updateFilterText(next);
   }, []);
 
-  return (
-    <Input
-      placeholder="Search log"
-      variant="tertiary"
-      icon={MagnifyingGlassIcon}
-      fullWidth={true}
-      value={value}
-      onChange={(e) => updateValue(e.target.value)}
-    />
-  );
+  return <SearchInput placeholder="Search logs…" value={value} onValueChange={updateValue} />;
 }
 
 function useAdjacentRunPaths({

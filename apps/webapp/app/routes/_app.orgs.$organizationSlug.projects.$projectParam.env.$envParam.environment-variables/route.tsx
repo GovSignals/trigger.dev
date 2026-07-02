@@ -1,34 +1,30 @@
-import { conform, useForm } from "@conform-to/react";
-import { parse } from "@conform-to/zod";
+import { getFormProps, getInputProps, useForm } from "@conform-to/react";
+import { parseWithZod } from "@conform-to/zod";
 import {
   BookOpenIcon,
   InformationCircleIcon,
   LockClosedIcon,
+  NoSymbolIcon,
   PencilSquareIcon,
   PlusIcon,
   TrashIcon,
 } from "@heroicons/react/20/solid";
 import {
   Form,
-  type MetaFunction,
   Outlet,
   useActionData,
   useFetcher,
   useNavigation,
   useRevalidator,
+  type MetaFunction,
 } from "@remix-run/react";
-import { type ActionFunctionArgs, type LoaderFunctionArgs, json } from "@remix-run/server-runtime";
+import { json } from "@remix-run/server-runtime";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
+import { fromPromise } from "neverthrow";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { typedjson, useTypedLoaderData } from "remix-typedjson";
 import { z } from "zod";
+import { UserAvatar } from "~/components/UserProfilePhoto";
 import { EnvironmentCombo } from "~/components/environments/EnvironmentLabel";
 import { VercelLogo } from "~/components/integrations/VercelLogo";
 import { PageBody, PageContainer } from "~/components/layout/AppLayout";
@@ -43,10 +39,10 @@ import { FormError } from "~/components/primitives/FormError";
 import { Header2 } from "~/components/primitives/Headers";
 import { Input } from "~/components/primitives/Input";
 import { InputGroup } from "~/components/primitives/InputGroup";
-import { SearchInput } from "~/components/primitives/SearchInput";
 import { Label } from "~/components/primitives/Label";
 import { NavBar, PageAccessories, PageTitle } from "~/components/primitives/PageHeader";
 import { Paragraph } from "~/components/primitives/Paragraph";
+import { SearchInput } from "~/components/primitives/SearchInput";
 import { Switch } from "~/components/primitives/Switch";
 import {
   Table,
@@ -61,20 +57,22 @@ import { SimpleTooltip } from "~/components/primitives/Tooltip";
 import { prisma } from "~/db.server";
 import { useEnvironment } from "~/hooks/useEnvironment";
 import { useFuzzyFilter } from "~/hooks/useFuzzyFilter";
-import { useSearchParams } from "~/hooks/useSearchParam";
 import { useOrganization } from "~/hooks/useOrganizations";
 import { useProject } from "~/hooks/useProject";
+import { useSearchParams } from "~/hooks/useSearchParam";
 import { redirectWithSuccessMessage } from "~/models/message.server";
+import { resolveOrgIdFromSlug } from "~/models/organization.server";
 import {
-  type EnvironmentVariableWithSetValues,
   EnvironmentVariablesPresenter,
+  type EnvironmentVariableWithSetValues,
 } from "~/presenters/v3/EnvironmentVariablesPresenter.server";
 import { type EnvironmentVariablesEnvironment } from "~/presenters/v3/environmentVariablesEnvironments.server";
-import { requireUserId } from "~/services/session.server";
+import { logger } from "~/services/logger.server";
+import { dashboardAction, dashboardLoader } from "~/services/routeBuilders/dashboardBuilder";
+import { VercelIntegrationService } from "~/services/vercelIntegration.server";
 import { cn } from "~/utils/cn";
 import {
   EnvironmentParamSchema,
-  ProjectParamSchema,
   docsPath,
   v3EnvironmentVariablesPath,
   v3NewEnvironmentVariablesPath,
@@ -83,15 +81,10 @@ import { EnvironmentVariablesRepository } from "~/v3/environmentVariables/enviro
 import {
   DeleteEnvironmentVariableValue,
   EditEnvironmentVariableValue,
-  EnvironmentVariable,
 } from "~/v3/environmentVariables/repository";
-import { UserAvatar } from "~/components/UserProfilePhoto";
-import { VercelIntegrationService } from "~/services/vercelIntegration.server";
-import { fromPromise } from "neverthrow";
-import { logger } from "~/services/logger.server";
 import {
-  shouldSyncEnvVar,
   isPullEnvVarsEnabledForEnvironment,
+  shouldSyncEnvVar,
   type TriggerEnvironmentType,
 } from "~/v3/vercel/vercelProjectIntegrationSchema";
 
@@ -107,42 +100,90 @@ type PageVercelIntegration = NonNullable<
   Awaited<ReturnType<EnvironmentVariablesPresenter["call"]>>["vercelIntegration"]
 >;
 
+// A value the current role can't read for its environment tier is masked
+// server-side: the value is withheld and the cell renders "Permission denied".
+export type MaskedEnvironmentVariable = EnvironmentVariableWithSetValues & {
+  permissionDenied?: boolean;
+};
+
 export type EnvironmentVariablesPageLoaderData = {
-  environmentVariables: EnvironmentVariableWithSetValues[];
+  environmentVariables: MaskedEnvironmentVariable[];
   environments: EnvironmentVariablesEnvironment[];
   hasStaging: boolean;
   vercelIntegration: PageVercelIntegration | null;
+  // Environment ids whose env vars the current role can read.
+  accessibleEnvironmentIds: string[];
+  // Environment ids whose env vars the current role can write (create/edit/delete).
+  writableEnvironmentIds: string[];
 };
 
 export const environmentVariablesRouteId =
   "routes/_app.orgs.$organizationSlug.projects.$projectParam.env.$envParam.environment-variables";
 
-export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const userId = await requireUserId(request);
-  const { projectParam } = ProjectParamSchema.parse(params);
+export const loader = dashboardLoader(
+  {
+    params: EnvironmentParamSchema,
+    context: async (params) => {
+      const organizationId = await resolveOrgIdFromSlug(params.organizationSlug);
+      return organizationId ? { organizationId } : {};
+    },
+    // No hard authorization: the page lists every environment. Values in
+    // environments the role can't read are masked per-tier below.
+  },
+  async ({ params, user, ability }) => {
+    const { projectParam } = params;
 
-  try {
-    const presenter = new EnvironmentVariablesPresenter();
-    const { environmentVariables, environments, hasStaging, vercelIntegration } =
-      await presenter.call({
-        userId,
-        projectSlug: projectParam,
+    try {
+      const presenter = new EnvironmentVariablesPresenter();
+      const { environmentVariables, environments, hasStaging, vercelIntegration } =
+        await presenter.call({
+          userId: user.id,
+          projectSlug: projectParam,
+        });
+
+      const accessibleEnvironmentIds = environments
+        .filter((env) => ability.can("read", { type: "envvars", envType: env.type }))
+        .map((env) => env.id);
+      const accessible = new Set(accessibleEnvironmentIds);
+
+      // Write access is a separate grant from read: gate write controls (edit,
+      // delete, create) on this set, not on read-accessibility.
+      const writableEnvironmentIds = environments
+        .filter((env) => ability.can("write", { type: "envvars", envType: env.type }))
+        .map((env) => env.id);
+
+      // Withhold values (and the "who/when" metadata) for environments the
+      // role can't read — never serialize them to the client.
+      const masked: MaskedEnvironmentVariable[] = environmentVariables.map((variable) =>
+        accessible.has(variable.environment.id)
+          ? variable
+          : {
+              ...variable,
+              value: "",
+              isSecret: false,
+              permissionDenied: true,
+              lastUpdatedBy: null,
+              updatedByUser: null,
+            }
+      );
+
+      return typedjson({
+        environmentVariables: masked,
+        environments,
+        hasStaging,
+        vercelIntegration,
+        accessibleEnvironmentIds,
+        writableEnvironmentIds,
       });
-
-    return typedjson({
-      environmentVariables,
-      environments,
-      hasStaging,
-      vercelIntegration,
-    });
-  } catch (error) {
-    console.error(error);
-    throw new Response(undefined, {
-      status: 400,
-      statusText: "Something went wrong, if this problem persists please contact support.",
-    });
+    } catch (error) {
+      console.error(error);
+      throw new Response(undefined, {
+        status: 400,
+        statusText: "Something went wrong, if this problem persists please contact support.",
+      });
+    }
   }
-};
+);
 
 const schema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("edit"), ...EditEnvironmentVariableValue.shape }),
@@ -161,131 +202,159 @@ const schema = z.discriminatedUnion("action", [
   }),
 ]);
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const userId = await requireUserId(request);
-  const { organizationSlug, projectParam, envParam } = EnvironmentParamSchema.parse(params);
+export const action = dashboardAction(
+  {
+    params: EnvironmentParamSchema,
+    context: async (params) => {
+      const organizationId = await resolveOrgIdFromSlug(params.organizationSlug);
+      return organizationId ? { organizationId } : {};
+    },
+    // Per-environment write:envvars is enforced in the handler — the target
+    // environment tier comes from the submission, not the route params.
+  },
+  async ({ request, params, user, ability }) => {
+    const userId = user.id;
+    const { organizationSlug, projectParam, envParam } = params;
 
-  if (request.method.toUpperCase() !== "POST") {
-    return { status: 405, body: "Method Not Allowed" };
-  }
+    if (request.method.toUpperCase() !== "POST") {
+      throw new Response("Method Not Allowed", { status: 405 });
+    }
 
-  const formData = await request.formData();
-  const submission = parse(formData, { schema });
+    const formData = await request.formData();
+    const submission = parseWithZod(formData, { schema });
 
-  if (!submission.value) {
-    return json(submission);
-  }
+    if (submission.status !== "success") {
+      return json(submission.reply());
+    }
 
-  const project = await prisma.project.findUnique({
-    where: {
-      slug: params.projectParam,
-      organization: {
-        members: {
-          some: {
-            userId,
+    // Enforce env-tier write:envvars on the targeted environment, so a role
+    // that can't write a deployed tier can't mutate it via a direct POST.
+    const targetEnvType =
+      submission.value.action === "update-vercel-sync"
+        ? submission.value.environmentType
+        : (
+            await prisma.runtimeEnvironment.findFirst({
+              where: { id: submission.value.environmentId },
+              select: { type: true },
+            })
+          )?.type;
+    if (targetEnvType && !ability.can("write", { type: "envvars", envType: targetEnvType })) {
+      return json(
+        submission.reply({
+          formErrors: [
+            "You don't have permission to manage environment variables in this environment.",
+          ],
+        })
+      );
+    }
+
+    const project = await prisma.project.findUnique({
+      where: {
+        slug: params.projectParam,
+        organization: {
+          members: {
+            some: {
+              userId,
+            },
           },
         },
       },
-    },
-    select: {
-      id: true,
-    },
-  });
-  if (!project) {
-    submission.error.key = ["Project not found"];
-    return json(submission);
-  }
-
-  switch (submission.value.action) {
-    case "edit": {
-      const repository = new EnvironmentVariablesRepository(prisma);
-      const result = await repository.editValue(project.id, {
-        ...submission.value,
-        lastUpdatedBy: {
-          type: "user",
-          userId,
-        },
-      });
-
-      if (!result.success) {
-        submission.error.key = [result.error];
-        return json(submission);
-      }
-
-      return json({ ...submission, success: true });
+      select: {
+        id: true,
+      },
+    });
+    if (!project) {
+      return json(submission.reply({ formErrors: ["Project not found"] }));
     }
-    case "delete": {
-      const repository = new EnvironmentVariablesRepository(prisma);
-      const result = await repository.deleteValue(project.id, submission.value);
 
-      if (!result.success) {
-        submission.error.key = [result.error];
-        return json(submission);
+    switch (submission.value.action) {
+      case "edit": {
+        const repository = new EnvironmentVariablesRepository(prisma);
+        const result = await repository.editValue(project.id, {
+          ...submission.value,
+          lastUpdatedBy: {
+            type: "user",
+            userId,
+          },
+        });
+
+        if (!result.success) {
+          return json(submission.reply({ formErrors: [result.error] }));
+        }
+
+        return json({ ...submission.reply(), success: true });
       }
+      case "delete": {
+        const repository = new EnvironmentVariablesRepository(prisma);
+        const result = await repository.deleteValue(project.id, submission.value);
 
-      // Clean up syncEnvVarsMapping if Vercel integration exists (best-effort)
-      const { environmentId, key } = submission.value;
-      const vercelService = new VercelIntegrationService();
-      await fromPromise(
-        (async () => {
-          const integration = await vercelService.getVercelProjectIntegration(project.id);
-          if (integration) {
-            const runtimeEnv = await prisma.runtimeEnvironment.findUnique({
-              where: { id: environmentId },
-              select: { type: true },
-            });
-            if (runtimeEnv) {
-              await vercelService.removeSyncEnvVarForEnvironment(
-                project.id,
-                key,
-                runtimeEnv.type as TriggerEnvironmentType
-              );
+        if (!result.success) {
+          return json(submission.reply({ formErrors: [result.error] }));
+        }
+
+        // Clean up syncEnvVarsMapping if Vercel integration exists (best-effort)
+        const { environmentId, key } = submission.value;
+        const vercelService = new VercelIntegrationService();
+        await fromPromise(
+          (async () => {
+            const integration = await vercelService.getVercelProjectIntegration(project.id);
+            if (integration) {
+              const runtimeEnv = await prisma.runtimeEnvironment.findUnique({
+                where: { id: environmentId },
+                select: { type: true },
+              });
+              if (runtimeEnv) {
+                await vercelService.removeSyncEnvVarForEnvironment(
+                  project.id,
+                  key,
+                  runtimeEnv.type as TriggerEnvironmentType
+                );
+              }
             }
-          }
-        })(),
-        (error) => error
-      ).mapErr((error) => {
-        logger.error("Failed to remove Vercel sync mapping", { error });
-        return error;
-      });
+          })(),
+          (error) => error
+        ).mapErr((error) => {
+          logger.error("Failed to remove Vercel sync mapping", { error });
+          return error;
+        });
 
-      return redirectWithSuccessMessage(
-        v3EnvironmentVariablesPath(
-          { slug: organizationSlug },
-          { slug: projectParam },
-          { slug: envParam }
-        ),
-        request,
-        `Deleted ${submission.value.key} environment variable`
-      );
-    }
-    case "update-vercel-sync": {
-      const vercelService = new VercelIntegrationService();
-      const integration = await vercelService.getVercelProjectIntegration(project.id);
-
-      if (!integration) {
-        submission.error.key = ["Vercel integration not found"];
-        return json(submission);
+        return redirectWithSuccessMessage(
+          v3EnvironmentVariablesPath(
+            { slug: organizationSlug },
+            { slug: projectParam },
+            { slug: envParam }
+          ),
+          request,
+          `Deleted ${submission.value.key} environment variable`
+        );
       }
+      case "update-vercel-sync": {
+        const vercelService = new VercelIntegrationService();
+        const integration = await vercelService.getVercelProjectIntegration(project.id);
 
-      // Update the sync mapping for the specific env var and environment
-      await vercelService.updateSyncEnvVarForEnvironment(
-        project.id,
-        submission.value.key,
-        submission.value.environmentType,
-        submission.value.syncEnabled
-      );
+        if (!integration) {
+          return json(submission.reply({ formErrors: ["Vercel integration not found"] }));
+        }
 
-      return json({ success: true });
+        // Update the sync mapping for the specific env var and environment
+        await vercelService.updateSyncEnvVarForEnvironment(
+          project.id,
+          submission.value.key,
+          submission.value.environmentType,
+          submission.value.syncEnabled
+        );
+
+        return json({ success: true });
+      }
     }
   }
-};
+);
 
 const SSR_ROW_WINDOW = 50;
 const ROW_ESTIMATE_HEIGHT = 44;
 const VIRTUAL_OVERSCAN = 10;
 
-type GroupedEnvironmentVariable = EnvironmentVariableWithSetValues & {
+type GroupedEnvironmentVariable = MaskedEnvironmentVariable & {
   isFirstTime: boolean;
   isLastTime: boolean;
   occurences: number;
@@ -538,16 +607,22 @@ function EnvironmentVariableTableRow({
   const borderedCellClassName = getBorderedCellClassName(variable);
 
   return (
-    <TableRow
-      className={variable.isLastTime ? "after:bg-charcoal-600" : "after:bg-transparent"}
-    >
+    <TableRow className={variable.isLastTime ? "after:bg-charcoal-600" : "after:bg-transparent"}>
       <TableCell className={cellClassName}>
-        {variable.isFirstTime ? (
-          <CopyableText value={variable.key} className="font-mono" />
-        ) : null}
+        {variable.isFirstTime ? <CopyableText value={variable.key} className="font-mono" /> : null}
       </TableCell>
       <TableCell className={cn(cellClassName, borderedCellClassName, "after:left-3")}>
-        {variable.isSecret ? (
+        {variable.permissionDenied ? (
+          <SimpleTooltip
+            button={
+              <div className="flex items-center gap-x-1">
+                <NoSymbolIcon className="size-3 text-text-dimmed" />
+                <span className="text-xs text-text-dimmed">Permission denied</span>
+              </div>
+            }
+            content="With your current role, you can't view this environment's variables."
+          />
+        ) : variable.isSecret ? (
           <SimpleTooltip
             button={
               <div className="flex items-center gap-x-1">
@@ -620,10 +695,14 @@ function EnvironmentVariableTableRow({
         isSticky
         className="[&:has(.group-hover/table-row:block)]:w-auto w-0"
         hiddenButtons={
-          <>
-            <EditEnvironmentVariablePanel variable={variable} revealAll={revealAll} />
-            <DeleteEnvironmentVariableButton variable={variable} />
-          </>
+          // No edit/delete for environments the role can't manage — the value
+          // is withheld, and the action enforces write:envvars independently.
+          variable.permissionDenied ? undefined : (
+            <>
+              <EditEnvironmentVariablePanel variable={variable} revealAll={revealAll} />
+              <DeleteEnvironmentVariableButton variable={variable} />
+            </>
+          )
         }
       />
     </TableRow>
@@ -652,8 +731,7 @@ function EnvironmentVariablesVirtualTableBody({
 
   const virtualItems = rowVirtualizer.getVirtualItems();
   const topSpacerHeight = virtualItems[0]?.start ?? 0;
-  const bottomSpacerHeight =
-    rowVirtualizer.getTotalSize() - (virtualItems.at(-1)?.end ?? 0);
+  const bottomSpacerHeight = rowVirtualizer.getTotalSize() - (virtualItems.at(-1)?.end ?? 0);
 
   return (
     <TableBody>
@@ -709,9 +787,9 @@ function EditEnvironmentVariablePanel({
   const [form, { id, environmentId, value }] = useForm({
     id: `edit-environment-variable-${variable.id}-${variable.environment.id}`,
     // TODO: type this
-    lastSubmission: lastSubmission as any,
+    lastResult: lastSubmission as any,
     onValidate({ formData }) {
-      return parse(formData, { schema });
+      return parseWithZod(formData, { schema });
     },
     shouldRevalidate: "onSubmit",
   });
@@ -728,15 +806,15 @@ function EditEnvironmentVariablePanel({
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>Edit environment variable</DialogHeader>
-        <fetcher.Form method="post" {...form.props}>
+        <fetcher.Form method="post" {...getFormProps(form)}>
           <input type="hidden" name="action" value="edit" />
-          <input {...conform.input(id, { type: "hidden" })} value={variable.id} />
+          <input {...getInputProps(id, { type: "hidden" })} value={variable.id} />
           <input
-            {...conform.input(environmentId, { type: "hidden" })}
+            {...getInputProps(environmentId, { type: "hidden" })}
             value={variable.environment.id}
           />
-          <FormError id={id.errorId}>{id.error}</FormError>
-          <FormError id={environmentId.errorId}>{environmentId.error}</FormError>
+          <FormError id={id.errorId}>{id.errors}</FormError>
+          <FormError id={environmentId.errorId}>{environmentId.errors}</FormError>
           <Fieldset>
             <InputGroup fullWidth className="mt-2 gap-0">
               <Label>Key</Label>
@@ -751,15 +829,15 @@ function EditEnvironmentVariablePanel({
             <InputGroup fullWidth>
               <Label>Value</Label>
               <Input
-                {...conform.input(value, { type: "text" })}
+                {...getInputProps(value, { type: "text" })}
                 placeholder={variable.isSecret ? "Set new secret value" : "Not set"}
                 defaultValue={variable.value}
                 type={"text"}
               />
-              <FormError id={value.errorId}>{value.error}</FormError>
+              <FormError id={value.errorId}>{value.errors}</FormError>
             </InputGroup>
 
-            <FormError>{form.error}</FormError>
+            <FormError>{form.errors}</FormError>
 
             <FormButtons
               confirmButton={
@@ -793,18 +871,18 @@ function DeleteEnvironmentVariableButton({
     navigation.formMethod === "post" &&
     navigation.formData?.get("action") === "delete";
 
-  const [form, { id }] = useForm({
+  const [form] = useForm({
     id: "delete-environment-variable",
     // TODO: type this
-    lastSubmission: lastSubmission as any,
+    lastResult: lastSubmission as any,
     onValidate({ formData }) {
-      return parse(formData, { schema });
+      return parseWithZod(formData, { schema });
     },
     shouldRevalidate: "onSubmit",
   });
 
   return (
-    <Form method="post" {...form.props}>
+    <Form method="post" {...getFormProps(form)}>
       <input type="hidden" name="id" value={variable.id} />
       <input type="hidden" name="key" value={variable.key} />
       <input type="hidden" name="environmentId" value={variable.environment.id} />

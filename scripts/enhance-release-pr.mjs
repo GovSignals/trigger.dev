@@ -35,33 +35,76 @@ function parsePrBody(body) {
   const entries = [];
   if (!body) return entries;
 
-  // Deduplicate by PR number
+  // Deduplicate by entry content. A single changeset that targets multiple
+  // packages is rendered once per package section, so the same text repeats and
+  // we collapse it. But several distinct changesets from one PR have distinct
+  // text (and each still carries that PR's link), so keying on content keeps
+  // them all instead of dropping every entry after the first for that PR.
   const seen = new Set();
-  const prPattern = /\[#(\d+)\]\(([^)]+)\)/;
+
+  // A standalone dependency-bump list item, e.g. "`@trigger.dev/core@4.5.0-rc.7`"
+  // or "trigger.dev@4.5.0-rc.7". These normally appear nested under
+  // "Updated dependencies:" (and so get swallowed into that item below), but we
+  // guard against them showing up on their own too. Crucially this only matches
+  // a line that is *entirely* a package bump, so a real changeset that merely
+  // begins with a package name (e.g. "`@trigger.dev/sdk` now bundles ...") is
+  // kept.
+  const depBumpPattern = /^`?(?:@trigger\.dev\/[\w-]+|trigger\.dev)@[\w.+-]+`?$/;
+
+  // Group lines into top-level list items. A top-level item starts with a bullet
+  // at column 0 ("- " / "* "); every indented or blank line below it (sub-bullets,
+  // fenced code blocks, continuation paragraphs) belongs to that same item.
+  const items = [];
+  let current = null;
+
+  const flush = () => {
+    if (!current) return;
+    while (current.length > 1 && current[current.length - 1].trim() === "") {
+      current.pop();
+    }
+    items.push(current);
+    current = null;
+  };
 
   for (const line of body.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("- ") && !trimmed.startsWith("* ")) continue;
-
-    let text = trimmed.replace(/^[-*]\s+/, "").trim();
-    if (!text) continue;
-
-    // Skip dependency-only updates (e.g. "Updated dependencies:" or "@trigger.dev/core@4.4.2")
-    if (text.startsWith("Updated dependencies")) continue;
-    if (text.startsWith("`@trigger.dev/")) continue;
-    if (text.startsWith("@trigger.dev/")) continue;
-    if (text.startsWith("`trigger.dev@")) continue;
-    if (text.startsWith("trigger.dev@")) continue;
-
-    const prMatch = trimmed.match(prPattern);
-    if (prMatch) {
-      const prNumber = prMatch[1];
-      if (seen.has(prNumber)) continue;
-      seen.add(prNumber);
+    const isTopLevelBullet = /^[-*]\s+/.test(line);
+    if (isTopLevelBullet) {
+      flush();
+      current = [line];
+    } else if (current) {
+      if (line.trim() === "" || /^\s/.test(line)) {
+        current.push(line);
+      } else {
+        // A non-indented, non-blank, non-bullet line (heading or prose) ends the item
+        flush();
+      }
     }
+  }
+  flush();
 
-    // Categorize
-    const lower = text.toLowerCase();
+  for (const itemLines of items) {
+    const headLine = itemLines[0].replace(/^[-*]\s+/, "").trim();
+    if (!headLine) continue;
+
+    // Skip dependency-only updates
+    if (headLine.startsWith("Updated dependencies")) continue;
+    if (depBumpPattern.test(headLine)) continue;
+
+    // Reconstruct the full item: head line + dedented continuation lines, so
+    // code blocks and sub-bullets survive. Continuation under a "-   " item is
+    // indented 4 spaces; strip up to 4 to bring it back to the base level.
+    const continuation = itemLines.slice(1).map((l) => l.replace(/^ {1,4}/, ""));
+    const text = [headLine, ...continuation].join("\n").replace(/\s+$/, "");
+
+    // Deduplicate on the full entry text (which embeds the PR link). The same
+    // changeset echoed across package sections collapses to one, while multiple
+    // distinct changesets from a single PR are each preserved.
+    const dedupeKey = text.replace(/\s+/g, " ").trim();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    // Categorize off the head line
+    const lower = headLine.toLowerCase();
     let type = "improvement";
     if (lower.startsWith("fix") || lower.includes("bug fix")) {
       type = "fix";
@@ -206,6 +249,12 @@ function parseFrontmatter(content) {
 
 // --- Format the enhanced PR body ---
 
+// Render an entry as a list item, re-indenting continuation lines (code blocks,
+// sub-bullets, paragraphs) by 2 spaces so they stay inside the "- " bullet.
+function renderEntry(text) {
+  return `- ${text.replace(/\n/g, "\n  ")}`;
+}
+
 function formatPrBody({ version, packageEntries, serverEntries, rawBody }) {
   const lines = [];
 
@@ -238,7 +287,7 @@ function formatPrBody({ version, packageEntries, serverEntries, rawBody }) {
   // Breaking changes
   if (breaking.length > 0 || serverBreaking.length > 0) {
     lines.push("## Breaking changes");
-    for (const entry of [...breaking, ...serverBreaking]) lines.push(`- ${entry.text}`);
+    for (const entry of [...breaking, ...serverBreaking]) lines.push(renderEntry(entry.text));
     lines.push("");
   }
 
@@ -247,7 +296,7 @@ function formatPrBody({ version, packageEntries, serverEntries, rawBody }) {
     lines.push("## Highlights");
     lines.push("");
     for (const entry of features) {
-      lines.push(`- ${entry.text}`);
+      lines.push(renderEntry(entry.text));
     }
     lines.push("");
   }
@@ -255,14 +304,14 @@ function formatPrBody({ version, packageEntries, serverEntries, rawBody }) {
   // Improvements
   if (improvements.length > 0) {
     lines.push("## Improvements");
-    for (const entry of improvements) lines.push(`- ${entry.text}`);
+    for (const entry of improvements) lines.push(renderEntry(entry.text));
     lines.push("");
   }
 
   // Bug fixes
   if (fixes.length > 0) {
     lines.push("## Bug fixes");
-    for (const entry of fixes) lines.push(`- ${entry.text}`);
+    for (const entry of fixes) lines.push(renderEntry(entry.text));
     lines.push("");
   }
 
@@ -274,9 +323,7 @@ function formatPrBody({ version, packageEntries, serverEntries, rawBody }) {
     lines.push("These changes affect the self-hosted Docker image and Trigger.dev Cloud:");
     lines.push("");
     for (const entry of allServer) {
-      // Indent continuation lines so multi-line entries stay inside the list item
-      const indented = entry.text.replace(/\n/g, "\n  ");
-      lines.push(`- ${indented}`);
+      lines.push(renderEntry(entry.text));
     }
     lines.push("");
   }

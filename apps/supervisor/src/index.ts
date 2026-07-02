@@ -20,18 +20,23 @@ import {
   CheckpointClient,
   isKubernetesEnvironment,
 } from "@trigger.dev/core/v3/serverOnly";
-import { createK8sApi } from "./clients/kubernetes.js";
-import { collectDefaultMetrics, Histogram } from "prom-client";
+import { createK8sApi, createApiserverMetricsFetcher } from "./clients/kubernetes.js";
+import { collectDefaultMetrics, Gauge, Histogram } from "prom-client";
 import { register } from "./metrics.js";
 import { PodCleaner } from "./services/podCleaner.js";
 import { FailedPodHandler } from "./services/failedPodHandler.js";
 import { getWorkerToken } from "./workerToken.js";
 import { OtlpTraceService } from "./services/otlpTraceService.js";
+import {
+  WarmStartVerificationService,
+  type WarmStartTimings,
+} from "./services/warmStartVerificationService.js";
 import { extractTraceparent, getRestoreRunnerId } from "./util.js";
 import { Redis } from "ioredis";
 import { BackpressureMonitor } from "./backpressure/backpressureMonitor.js";
 import { RedisBackpressureSignalSource } from "./backpressure/redisBackpressureSignalSource.js";
 import { BackpressureMetrics } from "./backpressure/backpressureMetrics.js";
+import { K8sPodCountSignalSource } from "./backpressure/k8sPodCountSignalSource.js";
 import {
   fromContext,
   recordPhaseSince,
@@ -63,11 +68,12 @@ class ManagedSupervisor {
   private readonly logger = new SimpleStructuredLogger("managed-supervisor");
   private readonly resourceMonitor: ResourceMonitor;
   private readonly checkpointClient?: CheckpointClient;
+  private readonly warmStartVerifier?: WarmStartVerificationService;
 
   private readonly podCleaner?: PodCleaner;
   private readonly failedPodHandler?: FailedPodHandler;
   private readonly tracing?: OtlpTraceService;
-  private readonly backpressureMonitor?: BackpressureMonitor;
+  private readonly backpressureMonitors: BackpressureMonitor[] = [];
   private readonly backpressureRedis?: Redis;
 
   private readonly isKubernetes = isKubernetesEnvironment(env.KUBERNETES_FORCE_ENABLED);
@@ -152,6 +158,7 @@ class ManagedSupervisor {
           instanceName: env.TRIGGER_WORKER_INSTANCE_NAME,
           otelEndpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT,
           prettyLogs: env.RUNNER_PRETTY_LOGS,
+          sendRunDebugLogs: env.SEND_RUN_DEBUG_LOGS,
         },
         createRetry: {
           maxAttempts: env.COMPUTE_INSTANCE_CREATE_MAX_ATTEMPTS,
@@ -207,6 +214,7 @@ class ManagedSupervisor {
       );
     }
 
+    // Redis-verdict source (external aggregator). Keeps existing metric names.
     if (env.TRIGGER_DEQUEUE_BACKPRESSURE_ENABLED) {
       this.backpressureRedis = new Redis({
         host: env.TRIGGER_DEQUEUE_BACKPRESSURE_REDIS_HOST,
@@ -219,27 +227,64 @@ class ManagedSupervisor {
       this.backpressureRedis.on("error", (error) =>
         this.logger.error("Backpressure redis error", { error: error.message })
       );
-
-      this.backpressureMonitor = new BackpressureMonitor({
-        enabled: true,
-        source: new RedisBackpressureSignalSource(
-          this.backpressureRedis,
-          env.TRIGGER_DEQUEUE_BACKPRESSURE_REDIS_KEY
-        ),
-        refreshIntervalMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_REFRESH_MS,
-        maxVerdictAgeMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_MAX_VERDICT_AGE_MS,
-        rampMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_RAMP_MS,
-        dryRun: env.TRIGGER_DEQUEUE_BACKPRESSURE_DRY_RUN,
-        logger: this.logger,
-        metrics: new BackpressureMetrics({ register }),
-      });
-
-      this.logger.log("🛑 Dequeue backpressure enabled", {
+      this.backpressureMonitors.push(
+        new BackpressureMonitor({
+          enabled: true,
+          source: new RedisBackpressureSignalSource(
+            this.backpressureRedis,
+            env.TRIGGER_DEQUEUE_BACKPRESSURE_REDIS_KEY
+          ),
+          refreshIntervalMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_REFRESH_MS,
+          maxVerdictAgeMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_MAX_VERDICT_AGE_MS,
+          rampMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_RAMP_MS,
+          dryRun: env.TRIGGER_DEQUEUE_BACKPRESSURE_DRY_RUN,
+          logger: this.logger,
+          metrics: new BackpressureMetrics({ register }),
+        })
+      );
+      this.logger.log("🛑 Dequeue backpressure enabled (redis source)", {
         key: env.TRIGGER_DEQUEUE_BACKPRESSURE_REDIS_KEY,
         refreshIntervalMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_REFRESH_MS,
-        maxVerdictAgeMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_MAX_VERDICT_AGE_MS,
-        rampMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_RAMP_MS,
         dryRun: env.TRIGGER_DEQUEUE_BACKPRESSURE_DRY_RUN,
+      });
+    }
+
+    // Pod-count source (in-process apiserver scrape). Namespaced metrics so the
+    // redis source's metric names are preserved.
+    if (env.TRIGGER_DEQUEUE_BACKPRESSURE_POD_COUNT_ENABLED) {
+      // RELEASE < ENGAGE is enforced in env.ts (superRefine), so it's valid here.
+      const podCountGauge = new Gauge({
+        name: "supervisor_cluster_pod_count",
+        help: "Total pod objects stored in the cluster, scraped for backpressure",
+        registers: [register],
+      });
+      this.backpressureMonitors.push(
+        new BackpressureMonitor({
+          enabled: true,
+          source: new K8sPodCountSignalSource({
+            fetchMetrics: createApiserverMetricsFetcher(
+              env.TRIGGER_DEQUEUE_BACKPRESSURE_POD_COUNT_SCRAPE_TIMEOUT_MS
+            ),
+            engageThreshold: env.TRIGGER_DEQUEUE_BACKPRESSURE_POD_COUNT_ENGAGE,
+            releaseThreshold: env.TRIGGER_DEQUEUE_BACKPRESSURE_POD_COUNT_RELEASE,
+            reportPodCount: (count) => podCountGauge.set(count),
+          }),
+          refreshIntervalMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_POD_COUNT_REFRESH_MS,
+          maxVerdictAgeMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_MAX_VERDICT_AGE_MS,
+          rampMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_RAMP_MS,
+          dryRun: env.TRIGGER_DEQUEUE_BACKPRESSURE_POD_COUNT_DRY_RUN,
+          logger: this.logger,
+          metrics: new BackpressureMetrics({
+            register,
+            prefix: "supervisor_backpressure_pod_count",
+          }),
+        })
+      );
+      this.logger.log("🛑 Dequeue backpressure enabled (pod-count source)", {
+        engage: env.TRIGGER_DEQUEUE_BACKPRESSURE_POD_COUNT_ENGAGE,
+        release: env.TRIGGER_DEQUEUE_BACKPRESSURE_POD_COUNT_RELEASE,
+        refreshIntervalMs: env.TRIGGER_DEQUEUE_BACKPRESSURE_POD_COUNT_REFRESH_MS,
+        dryRun: env.TRIGGER_DEQUEUE_BACKPRESSURE_POD_COUNT_DRY_RUN,
       });
     }
 
@@ -266,14 +311,14 @@ class ManagedSupervisor {
         dampingFactor: env.TRIGGER_DEQUEUE_SCALING_DAMPING_FACTOR,
         // Freeze scale-up while backpressure is hard-engaged (not during the resume
         // ramp). Undefined when backpressure is disabled → no effect on scaling.
-        shouldPauseScaling: () => this.backpressureMonitor?.isEngaged() ?? false,
+        shouldPauseScaling: () => this.backpressureMonitors.some((m) => m.isEngaged()),
       },
       runNotificationsEnabled: env.TRIGGER_WORKLOAD_API_ENABLED,
       heartbeatIntervalSeconds: env.TRIGGER_WORKER_HEARTBEAT_INTERVAL_SECONDS,
       sendRunDebugLogs: env.SEND_RUN_DEBUG_LOGS,
       preDequeue: async () => {
-        // Synchronous, hot-path-safe cached read; undefined when backpressure is disabled.
-        const skipForBackpressure = this.backpressureMonitor?.shouldSkipDequeue() ?? false;
+        // Synchronous, hot-path-safe cached read; false when no monitors are active.
+        const skipForBackpressure = this.backpressureMonitors.some((m) => m.shouldSkipDequeue());
 
         if (!env.RESOURCE_MONITOR_ENABLED || this.isKubernetes) {
           // Resource monitor is not used in k8s; backpressure is the only gate there.
@@ -308,6 +353,19 @@ class ManagedSupervisor {
         apiUrl: new URL(env.TRIGGER_CHECKPOINT_URL),
         workerClient: this.workerSession.httpClient,
         orchestrator: this.isKubernetes ? "KUBERNETES" : "DOCKER",
+      });
+    }
+
+    if (env.TRIGGER_WARM_START_VERIFY_ENABLED && this.warmStartUrl) {
+      this.logger.log("Warm-start delivery verification enabled", {
+        delayMs: env.TRIGGER_WARM_START_VERIFY_DELAY_MS,
+      });
+
+      this.warmStartVerifier = new WarmStartVerificationService({
+        workerClient: this.workerSession.httpClient,
+        delayMs: env.TRIGGER_WARM_START_VERIFY_DELAY_MS,
+        createWorkload: (message, timings) => this.createWorkload(message, timings),
+        wideEventOpts: this.wideEventOpts,
       });
     }
 
@@ -467,66 +525,24 @@ class ManagedSupervisor {
             if (didWarmStart) {
               setExtra(fromContext(), "path_taken", "warm_start");
               this.logger.debug("Warm start successful", { runId: message.run.id });
+              // A hit only means the response was written to the long-poll
+              // socket, not that the runner received it. Schedule a delivery
+              // verification that cold-starts the run if nobody acts on it.
+              this.warmStartVerifier?.schedule(message, {
+                dequeueResponseMs,
+                pollingIntervalMs,
+                warmStartCheckMs,
+              });
               return;
             }
 
             setExtra(fromContext(), "path_taken", "cold_create");
 
-            const createStart = performance.now();
-            try {
-              if (!message.deployment.friendlyId) {
-                // mostly a type guard, deployments always exists for deployed environments
-                // a proper fix would be to use a discriminated union schema to differentiate between dequeued runs in dev and in deployed environments.
-                throw new Error("Deployment is missing");
-              }
-
-              await this.workloadManager.create({
-                dequeuedAt: message.dequeuedAt,
-                dequeueResponseMs,
-                pollingIntervalMs,
-                warmStartCheckMs,
-                envId: message.environment.id,
-                envType: message.environment.type,
-                image: message.image,
-                machine: message.run.machine,
-                orgId: message.organization.id,
-                projectId: message.project.id,
-                deploymentFriendlyId: message.deployment.friendlyId,
-                deploymentVersion: message.backgroundWorker.version,
-                runId: message.run.id,
-                runFriendlyId: message.run.friendlyId,
-                version: message.version,
-                nextAttemptNumber: message.run.attemptNumber,
-                snapshotId: message.snapshot.id,
-                snapshotFriendlyId: message.snapshot.friendlyId,
-                placementTags: message.placementTags,
-                traceContext: message.run.traceContext,
-                annotations: message.run.annotations,
-                hasPrivateLink: message.organization.hasPrivateLink,
-              });
-              recordPhaseSince("workload_create", createStart, undefined);
-              workloadCreateDuration.observe(
-                { backend: this.workloadManagerBackend, outcome: "success" },
-                (performance.now() - createStart) / 1000
-              );
-
-              // Disabled for now
-              // this.resourceMonitor.blockResources({
-              //   cpu: message.run.machine.cpu,
-              //   memory: message.run.machine.memory,
-              // });
-            } catch (error) {
-              recordPhaseSince(
-                "workload_create",
-                createStart,
-                error instanceof Error ? error : new Error(String(error))
-              );
-              workloadCreateDuration.observe(
-                { backend: this.workloadManagerBackend, outcome: "error" },
-                (performance.now() - createStart) / 1000
-              );
-              this.logger.error("Failed to create workload", { error });
-            }
+            await this.createWorkload(message, {
+              dequeueResponseMs,
+              pollingIntervalMs,
+              warmStartCheckMs,
+            });
           }
         );
       }
@@ -561,12 +577,80 @@ class ManagedSupervisor {
 
   async onRunConnected({ run }: { run: { friendlyId: string } }) {
     this.logger.debug("Run connected", { run });
+    // The dispatched run reached a runner on this node - no fallback needed.
+    this.warmStartVerifier?.cancel(run.friendlyId);
     this.workerSession.subscribeToRunNotifications([run.friendlyId]);
   }
 
   async onRunDisconnected({ run }: { run: { friendlyId: string } }) {
     this.logger.debug("Run disconnected", { run });
     this.workerSession.unsubscribeFromRunNotifications([run.friendlyId]);
+  }
+
+  private async createWorkload(message: DequeuedMessage, timings: WarmStartTimings) {
+    const createStart = performance.now();
+    try {
+      if (!message.deployment.friendlyId) {
+        // mostly a type guard, deployments always exists for deployed environments
+        // a proper fix would be to use a discriminated union schema to differentiate between dequeued runs in dev and in deployed environments.
+        throw new Error("Deployment is missing");
+      }
+
+      if (!message.image) {
+        // same type-guard situation as deployment above
+        throw new Error("Image is missing");
+      }
+
+      await this.workloadManager.create({
+        dequeuedAt: message.dequeuedAt,
+        dequeueResponseMs: timings.dequeueResponseMs,
+        pollingIntervalMs: timings.pollingIntervalMs,
+        warmStartCheckMs: timings.warmStartCheckMs,
+        envId: message.environment.id,
+        envType: message.environment.type,
+        image: message.image,
+        machine: message.run.machine,
+        orgId: message.organization.id,
+        projectId: message.project.id,
+        deploymentFriendlyId: message.deployment.friendlyId,
+        deploymentVersion: message.backgroundWorker.version,
+        runId: message.run.id,
+        runFriendlyId: message.run.friendlyId,
+        version: message.version,
+        nextAttemptNumber: message.run.attemptNumber,
+        snapshotId: message.snapshot.id,
+        snapshotFriendlyId: message.snapshot.friendlyId,
+        placementTags: message.placementTags,
+        traceContext: message.run.traceContext,
+        annotations: message.run.annotations,
+        hasPrivateLink: message.organization.hasPrivateLink,
+      });
+      recordPhaseSince("workload_create", createStart, undefined);
+      workloadCreateDuration.observe(
+        { backend: this.workloadManagerBackend, outcome: "success" },
+        (performance.now() - createStart) / 1000
+      );
+
+      // Disabled for now
+      // this.resourceMonitor.blockResources({
+      //   cpu: message.run.machine.cpu,
+      //   memory: message.run.machine.memory,
+      // });
+    } catch (error) {
+      recordPhaseSince(
+        "workload_create",
+        createStart,
+        error instanceof Error ? error : new Error(String(error))
+      );
+      workloadCreateDuration.observe(
+        { backend: this.workloadManagerBackend, outcome: "error" },
+        (performance.now() - createStart) / 1000
+      );
+      this.logger.error("Failed to create workload", {
+        runId: message.run.friendlyId,
+        error,
+      });
+    }
   }
 
   private async tryWarmStart(
@@ -629,7 +713,7 @@ class ManagedSupervisor {
     this.logger.log("Starting up");
 
     // Optional services
-    this.backpressureMonitor?.start();
+    this.backpressureMonitors.forEach((m) => m.start());
     await this.podCleaner?.start();
     await this.failedPodHandler?.start();
     await this.metricsServer?.start();
@@ -650,11 +734,14 @@ class ManagedSupervisor {
 
   async stop() {
     this.logger.log("Shutting down");
+    // Stop the verifier first: its timer can otherwise fire mid-shutdown and
+    // cold-create a workload on a node that is going down.
+    this.warmStartVerifier?.stop();
     await this.workloadServer.stop();
     await this.workerSession.stop();
 
     // Optional services
-    this.backpressureMonitor?.stop();
+    this.backpressureMonitors.forEach((m) => m.stop());
     await this.backpressureRedis?.quit();
     await this.podCleaner?.stop();
     await this.failedPodHandler?.stop();

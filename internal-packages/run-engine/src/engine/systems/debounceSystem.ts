@@ -1,7 +1,7 @@
 import {
+  type Redis,
+  type RedisOptions,
   createRedisClient,
-  Redis,
-  RedisOptions,
   type Callback,
   type Result,
 } from "@internal/redis";
@@ -10,16 +10,19 @@ import {
   parseNaturalLanguageDuration,
   parseNaturalLanguageDurationInMs,
 } from "@trigger.dev/core/v3/isomorphic";
-import {
+import type {
   PrismaClientOrTransaction,
   PrismaReplicaClient,
   TaskRun,
   Waitpoint,
 } from "@trigger.dev/database";
 import { nanoid } from "nanoid";
-import { SystemResources } from "./systems.js";
-import { ExecutionSnapshotSystem, getLatestExecutionSnapshot } from "./executionSnapshotSystem.js";
-import { DelayedRunSystem } from "./delayedRunSystem.js";
+import type { SystemResources } from "./systems.js";
+import {
+  type ExecutionSnapshotSystem,
+  getLatestExecutionSnapshot,
+} from "./executionSnapshotSystem.js";
+import type { DelayedRunSystem } from "./delayedRunSystem.js";
 import { LockAcquisitionTimeoutError } from "../locking.js";
 
 export type DebounceOptions = {
@@ -606,10 +609,11 @@ return 0
       return null;
     }
 
-    const probe = await prisma.taskRun.findFirst({
-      where: { id: existingRunId },
-      select: { status: true, delayUntil: true, createdAt: true },
-    });
+    const probe = await this.$.runStore.findRun(
+      { id: existingRunId },
+      { select: { status: true, delayUntil: true, createdAt: true } },
+      prisma
+    );
     if (!probe || probe.status !== "DELAYED" || !probe.delayUntil) {
       return null;
     }
@@ -632,10 +636,11 @@ return 0
       return null;
     }
 
-    const fullRun = await prisma.taskRun.findFirst({
-      where: { id: existingRunId },
-      include: { associatedWaitpoint: true },
-    });
+    const fullRun = await this.$.runStore.findRun(
+      { id: existingRunId },
+      { include: { associatedWaitpoint: true } },
+      prisma
+    );
     if (!fullRun || fullRun.status !== "DELAYED") {
       return null;
     }
@@ -665,10 +670,11 @@ return 0
     error: unknown;
     prisma: PrismaClientOrTransaction;
   }): Promise<DebounceResult> {
-    const fullRun = await prisma.taskRun.findFirst({
-      where: { id: existingRunId },
-      include: { associatedWaitpoint: true },
-    });
+    const fullRun = await this.$.runStore.findRun(
+      { id: existingRunId },
+      { include: { associatedWaitpoint: true } },
+      prisma
+    );
 
     if (!fullRun || fullRun.status !== "DELAYED") {
       // The run is no longer in a state we can safely return as "existing" -
@@ -775,12 +781,15 @@ return 0
       }
 
       // Get the run to check debounce metadata and createdAt
-      const existingRun = await prisma.taskRun.findFirst({
-        where: { id: existingRunId },
-        include: {
-          associatedWaitpoint: true,
+      const existingRun = await this.$.runStore.findRun(
+        { id: existingRunId },
+        {
+          include: {
+            associatedWaitpoint: true,
+          },
         },
-      });
+        prisma
+      );
 
       if (!existingRun) {
         this.$.logger.debug("handleExistingRun: existing run not found in database", {
@@ -1160,13 +1169,7 @@ return 0
       updatePayload.runTags = updateData.tags;
     }
 
-    const updatedRun = await prisma.taskRun.update({
-      where: { id: runId },
-      data: updatePayload,
-      include: {
-        associatedWaitpoint: true,
-      },
-    });
+    const updatedRun = await this.$.runStore.rewriteDebouncedRun(runId, updatePayload, prisma);
 
     return updatedRun;
   }

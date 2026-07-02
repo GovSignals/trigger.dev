@@ -1,11 +1,15 @@
-import { RunEngine } from "@internal/run-engine";
+import type { RunEngine } from "@internal/run-engine";
 import { TaskRunErrorCodes, type TaskRunError } from "@trigger.dev/core/v3";
 import { RunId } from "@trigger.dev/core/v3/isomorphic";
-import type { RuntimeEnvironmentType, TaskRun } from "@trigger.dev/database";
-import type { PrismaClientOrTransaction } from "@trigger.dev/database";
+import type {
+  PrismaClientOrTransaction,
+  RuntimeEnvironmentType,
+  TaskRun,
+} from "@trigger.dev/database";
 import type { AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
 import { getEventRepository } from "~/v3/eventRepository/index.server";
+import { runStore } from "~/v3/runStore.server";
 import { PerformTaskRunAlertsService } from "~/v3/services/alerts/performTaskRunAlerts.server";
 import { DefaultQueueManager } from "../concerns/queues.server";
 import type { TriggerTaskRequest } from "../types";
@@ -82,12 +86,13 @@ export class TriggerFailedTaskService {
 
       // Resolve parent run for rootTaskRunId and depth (same as triggerTask.server.ts)
       const parentRun = request.parentRunId
-        ? await this.prisma.taskRun.findFirst({
-            where: {
+        ? await runStore.findRun(
+            {
               id: RunId.fromFriendlyId(request.parentRunId),
               runtimeEnvironmentId: request.environment.id,
             },
-          })
+            this.prisma
+          )
         : undefined;
 
       const depth = parentRun ? parentRun.depth + 1 : 0;
@@ -228,8 +233,7 @@ export class TriggerFailedTaskService {
         logger.warn("TriggerFailedTaskService: alert enqueue failed", {
           taskId: request.taskId,
           friendlyId: failedRun.friendlyId,
-          error:
-            alertsError instanceof Error ? alertsError.message : String(alertsError),
+          error: alertsError instanceof Error ? alertsError.message : String(alertsError),
         });
       }
 
@@ -275,12 +279,13 @@ export class TriggerFailedTaskService {
       let depth = 0;
 
       if (opts.parentRunId) {
-        const parentRun = await this.prisma.taskRun.findFirst({
-          where: {
+        const parentRun = await runStore.findRun(
+          {
             id: RunId.fromFriendlyId(opts.parentRunId),
             runtimeEnvironmentId: opts.environmentId,
           },
-        });
+          this.prisma
+        );
 
         if (parentRun) {
           parentTaskRunId = parentRun.id;
@@ -334,8 +339,7 @@ export class TriggerFailedTaskService {
         logger.warn("TriggerFailedTaskService.callWithoutTraceEvents: alert enqueue failed", {
           taskId: opts.taskId,
           friendlyId: failedRun.friendlyId,
-          error:
-            alertsError instanceof Error ? alertsError.message : String(alertsError),
+          error: alertsError instanceof Error ? alertsError.message : String(alertsError),
         });
       }
 

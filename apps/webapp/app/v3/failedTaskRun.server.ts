@@ -1,11 +1,10 @@
-import {
-  calculateNextRetryDelay,
-  RetryOptions,
+import type {
   TaskRunExecution,
   TaskRunExecutionRetry,
   TaskRunFailedExecutionResult,
   V3TaskRunExecution,
 } from "@trigger.dev/core/v3";
+import { calculateNextRetryDelay, RetryOptions } from "@trigger.dev/core/v3";
 import type { Prisma, TaskRun } from "@trigger.dev/database";
 import * as semver from "semver";
 import { logger } from "~/services/logger.server";
@@ -37,12 +36,13 @@ export class FailedTaskRunService extends BaseService {
 
     const isFriendlyId = anyRunId.startsWith("run_");
 
-    const taskRun = await this._prisma.taskRun.findFirst({
-      where: {
+    const taskRun = await this.runStore.findRun(
+      {
         friendlyId: isFriendlyId ? anyRunId : undefined,
         id: !isFriendlyId ? anyRunId : undefined,
       },
-    });
+      this._prisma
+    );
 
     if (!taskRun) {
       logger.error("[FailedTaskRunService] Task run not found", {
@@ -90,12 +90,13 @@ export class FailedTaskRunRetryHelper extends BaseService {
     completion: TaskRunFailedExecutionResult;
     isCrash?: boolean;
   }) {
-    const taskRun = await this._prisma.taskRun.findFirst({
-      where: {
+    const taskRun = await this.runStore.findRun(
+      {
         id: runId,
       },
-      ...FailedTaskRunRetryGetPayload,
-    });
+      FailedTaskRunRetryGetPayload,
+      this._prisma
+    );
 
     if (!taskRun) {
       logger.error("[FailedTaskRunRetryHelper] Task run not found", {

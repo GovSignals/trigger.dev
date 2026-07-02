@@ -1,7 +1,7 @@
 import { redirect } from "@remix-run/server-runtime";
 import { prisma } from "~/db.server";
 import { logger } from "~/services/logger.server";
-import { SearchParams } from "~/routes/admin._index";
+import type { SearchParams } from "~/routes/admin._index";
 import {
   clearImpersonationId,
   commitImpersonationSession,
@@ -131,7 +131,7 @@ export async function adminGetOrganizations(userId: string, { page, search }: Se
       slug: true,
       title: true,
       v2Enabled: true,
-      v3Enabled: true,
+      isActivated: true,
       deletedAt: true,
       members: {
         select: {

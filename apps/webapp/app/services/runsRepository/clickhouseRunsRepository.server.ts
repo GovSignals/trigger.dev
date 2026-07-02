@@ -12,6 +12,7 @@ import {
 } from "./runsRepository.server";
 import parseDuration from "parse-duration";
 import { decodeRunsCursor, encodeRunsCursor } from "./runsCursor.server";
+import { runStore } from "~/v3/runStore.server";
 
 type RunCursorRow = { runId: string; createdAt: number };
 
@@ -148,16 +149,19 @@ export class ClickHouseRunsRepository implements IRunsRepository {
     }
 
     // Then get friendly IDs from Prisma
-    const runs = await this.options.prisma.taskRun.findMany({
-      where: {
-        id: {
-          in: runIds,
+    const runs = await runStore.findRuns(
+      {
+        where: {
+          id: {
+            in: runIds,
+          },
+        },
+        select: {
+          friendlyId: true,
         },
       },
-      select: {
-        friendlyId: true,
-      },
-    });
+      this.options.prisma
+    );
 
     return runs.map((run) => run.friendlyId);
   }
@@ -165,48 +169,52 @@ export class ClickHouseRunsRepository implements IRunsRepository {
   async listRuns(options: ListRunsOptions) {
     const { runIds, pagination } = await this.listRunIds(options);
 
-    let runs = await this.options.prisma.taskRun.findMany({
-      where: {
-        id: {
-          in: runIds,
+    let runs = await runStore.findRuns(
+      {
+        where: {
+          id: {
+            in: runIds,
+          },
+        },
+        orderBy: {
+          id: "desc",
+        },
+        select: {
+          id: true,
+          friendlyId: true,
+          taskIdentifier: true,
+          taskVersion: true,
+          runtimeEnvironmentId: true,
+          status: true,
+          createdAt: true,
+          startedAt: true,
+          lockedAt: true,
+          delayUntil: true,
+          updatedAt: true,
+          completedAt: true,
+          isTest: true,
+          spanId: true,
+          idempotencyKey: true,
+          ttl: true,
+          expiredAt: true,
+          costInCents: true,
+          baseCostInCents: true,
+          usageDurationMs: true,
+          runTags: true,
+          depth: true,
+          rootTaskRunId: true,
+          batchId: true,
+          metadata: true,
+          metadataType: true,
+          machinePreset: true,
+          queue: true,
+          workerQueue: true,
+          region: true,
+          annotations: true,
         },
       },
-      orderBy: {
-        id: "desc",
-      },
-      select: {
-        id: true,
-        friendlyId: true,
-        taskIdentifier: true,
-        taskVersion: true,
-        runtimeEnvironmentId: true,
-        status: true,
-        createdAt: true,
-        startedAt: true,
-        lockedAt: true,
-        delayUntil: true,
-        updatedAt: true,
-        completedAt: true,
-        isTest: true,
-        spanId: true,
-        idempotencyKey: true,
-        ttl: true,
-        expiredAt: true,
-        costInCents: true,
-        baseCostInCents: true,
-        usageDurationMs: true,
-        runTags: true,
-        depth: true,
-        rootTaskRunId: true,
-        batchId: true,
-        metadata: true,
-        metadataType: true,
-        machinePreset: true,
-        queue: true,
-        workerQueue: true,
-        annotations: true,
-      },
-    });
+      this.options.prisma
+    );
 
     // ClickHouse is slightly delayed, so we're going to do in-memory status filtering too
     if (options.statuses && options.statuses.length > 0) {
@@ -252,7 +260,7 @@ export class ClickHouseRunsRepository implements IRunsRepository {
         environmentId: options.environmentId,
       });
 
-    const periodMs = options.period ? parseDuration(options.period) ?? undefined : undefined;
+    const periodMs = options.period ? (parseDuration(options.period) ?? undefined) : undefined;
     if (periodMs) {
       queryBuilder.where("created_at >= fromUnixTimestamp64Milli({period: Int64})", {
         period: new Date(Date.now() - periodMs).getTime(),
@@ -377,7 +385,9 @@ function applyRunFiltersToQueryBuilder<T>(
   }
 
   if (options.regions && options.regions.length > 0) {
-    queryBuilder.where("worker_queue IN {regions: Array(String)}", { regions: options.regions });
+    queryBuilder.where("if(region != '', region, worker_queue) IN {regions: Array(String)}", {
+      regions: options.regions,
+    });
   }
 
   if (options.machines && options.machines.length > 0) {
@@ -395,9 +405,7 @@ function applyRunFiltersToQueryBuilder<T>(
   if (options.taskKinds && options.taskKinds.length > 0) {
     const includesStandard = options.taskKinds.includes("STANDARD");
     // Include empty string when filtering for STANDARD (default value for pre-existing runs)
-    const effectiveKinds = includesStandard
-      ? [...options.taskKinds, ""]
-      : options.taskKinds;
+    const effectiveKinds = includesStandard ? [...options.taskKinds, ""] : options.taskKinds;
 
     if (effectiveKinds.length === 1) {
       queryBuilder.where("task_kind = {taskKind: String}", {

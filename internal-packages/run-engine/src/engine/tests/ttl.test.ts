@@ -4,7 +4,7 @@ import { expect } from "vitest";
 import { Decimal } from "@trigger.dev/database";
 import { RunEngine } from "../index.js";
 import { setTimeout } from "timers/promises";
-import { EventBusEventArgs } from "../eventBus.js";
+import type { EventBusEventArgs } from "../eventBus.js";
 import { setupAuthenticatedEnvironment, setupBackgroundWorker } from "./setup.js";
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -54,7 +54,7 @@ describe("RunEngine ttl", () => {
       const taskIdentifier = "test-task";
 
       //create background worker
-      const backgroundWorker = await setupBackgroundWorker(
+      const _backgroundWorker = await setupBackgroundWorker(
         engine,
         authenticatedEnvironment,
         taskIdentifier
@@ -115,9 +115,8 @@ describe("RunEngine ttl", () => {
       expect(expiredRun?.status).toBe("EXPIRED");
 
       //concurrency should have been released
-      const envConcurrencyCompleted = await engine.runQueue.currentConcurrencyOfEnvironment(
-        authenticatedEnvironment
-      );
+      const envConcurrencyCompleted =
+        await engine.runQueue.currentConcurrencyOfEnvironment(authenticatedEnvironment);
       expect(envConcurrencyCompleted).toBe(0);
 
       // Queue sorted set should be empty (run removed from queue)
@@ -634,9 +633,8 @@ describe("RunEngine ttl", () => {
       }
 
       // Concurrency should be released for all
-      const envConcurrency = await engine.runQueue.currentConcurrencyOfEnvironment(
-        authenticatedEnvironment
-      );
+      const envConcurrency =
+        await engine.runQueue.currentConcurrencyOfEnvironment(authenticatedEnvironment);
       expect(envConcurrency).toBe(0);
 
       // Queue sorted set should be empty (all runs removed from queue)
@@ -986,9 +984,8 @@ describe("RunEngine ttl", () => {
         expect(expiredRunData?.status).toBe("EXPIRED");
 
         // Concurrency should be released
-        const envConcurrency = await engine.runQueue.currentConcurrencyOfEnvironment(
-          authenticatedEnvironment
-        );
+        const envConcurrency =
+          await engine.runQueue.currentConcurrencyOfEnvironment(authenticatedEnvironment);
         expect(envConcurrency).toBe(0);
       } finally {
         await engine.quit();
@@ -1070,9 +1067,8 @@ describe("RunEngine ttl", () => {
         await engine.runQueue.redis.sadd(envConcurrencyKey, run.id);
         await engine.runQueue.redis.sadd(envDequeuedKey, run.id);
 
-        const concurrencyBefore = await engine.runQueue.getCurrentConcurrencyOfEnvironment(
-          authenticatedEnvironment
-        );
+        const concurrencyBefore =
+          await engine.runQueue.getCurrentConcurrencyOfEnvironment(authenticatedEnvironment);
         expect(concurrencyBefore).toContain(run.id);
 
         await setTimeout(1_500);
@@ -1090,9 +1086,8 @@ describe("RunEngine ttl", () => {
           { timeout: 15_000, interval: 200 }
         );
 
-        const concurrencyAfter = await engine.runQueue.getCurrentConcurrencyOfEnvironment(
-          authenticatedEnvironment
-        );
+        const concurrencyAfter =
+          await engine.runQueue.getCurrentConcurrencyOfEnvironment(authenticatedEnvironment);
         expect(concurrencyAfter).not.toContain(run.id);
 
         const stillInDequeued = await engine.runQueue.redis.sismember(envDequeuedKey, run.id);
@@ -1397,7 +1392,7 @@ describe("RunEngine ttl", () => {
   );
 
   containerTest("expireRunsBatch handles non-existent runs", async ({ prisma, redisOptions }) => {
-    const authenticatedEnvironment = await setupAuthenticatedEnvironment(prisma, "PRODUCTION");
+    const _authenticatedEnvironment = await setupAuthenticatedEnvironment(prisma, "PRODUCTION");
 
     const engine = new RunEngine({
       prisma,
@@ -1526,7 +1521,7 @@ describe("RunEngine ttl", () => {
 
         // Dequeue and start parent
         await setTimeout(500);
-        const dequeued = await engine.dequeueFromWorkerQueue({
+        const _dequeued = await engine.dequeueFromWorkerQueue({
           consumerId: "test_12345",
           workerQueue: "main",
         });
@@ -1616,7 +1611,7 @@ describe("RunEngine ttl", () => {
   );
 
   containerTest("expireRunsBatch handles empty array", async ({ prisma, redisOptions }) => {
-    const authenticatedEnvironment = await setupAuthenticatedEnvironment(prisma, "PRODUCTION");
+    const _authenticatedEnvironment = await setupAuthenticatedEnvironment(prisma, "PRODUCTION");
 
     const engine = new RunEngine({
       prisma,

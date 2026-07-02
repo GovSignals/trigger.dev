@@ -1,6 +1,6 @@
 import colorWheelIcon from "../../assets/images/color-wheel.png";
-import { conform, useForm } from "@conform-to/react";
-import { parse } from "@conform-to/zod";
+import { getFormProps, getInputProps, useForm } from "@conform-to/react";
+import { conformZodMessage, parseWithZod } from "@conform-to/zod";
 import {
   CheckIcon,
   ExclamationTriangleIcon,
@@ -51,11 +51,7 @@ import { logger } from "~/services/logger.server";
 import { requireUser, requireUserId } from "~/services/session.server";
 import { cn } from "~/utils/cn";
 import { extractDomain, faviconUrl as buildFaviconUrl } from "~/utils/favicon";
-import {
-  OrganizationParamsSchema,
-  organizationSettingsPath,
-  rootPath,
-} from "~/utils/pathBuilder";
+import { OrganizationParamsSchema, organizationSettingsPath, rootPath } from "~/utils/pathBuilder";
 
 export const meta: MetaFunction = () => {
   return [
@@ -129,7 +125,7 @@ export function createSchema(
         if (constraints.getSlugMatch === undefined) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: conform.VALIDATION_UNDEFINED,
+            message: conformZodMessage.VALIDATION_UNDEFINED,
           });
         } else {
           const { isMatch, organizationSlug } = constraints.getSlugMatch(slug);
@@ -160,10 +156,10 @@ export const action: ActionFunction = async ({ request, params }) => {
       return { isMatch: slug === organizationSlug, organizationSlug };
     },
   });
-  const submission = parse(formData, { schema });
+  const submission = parseWithZod(formData, { schema });
 
-  if (!submission.value || submission.intent !== "submit") {
-    return json(submission);
+  if (submission.status !== "success") {
+    return json(submission.reply());
   }
 
   try {
@@ -287,10 +283,10 @@ export default function Page() {
   const [renameForm, { organizationName }] = useForm({
     id: "rename-organization",
     // TODO: type this
-    lastSubmission: lastSubmission as any,
+    lastResult: lastSubmission as any,
     shouldRevalidate: "onSubmit",
     onValidate({ formData }) {
-      return parse(formData, {
+      return parseWithZod(formData, {
         schema: createSchema(),
       });
     },
@@ -299,11 +295,11 @@ export default function Page() {
   const [deleteForm, { organizationSlug }] = useForm({
     id: "delete-organization",
     // TODO: type this
-    lastSubmission: lastSubmission as any,
+    lastResult: lastSubmission as any,
     shouldValidate: "onInput",
     shouldRevalidate: "onSubmit",
     onValidate({ formData }) {
-      return parse(formData, {
+      return parseWithZod(formData, {
         schema: createSchema({
           getSlugMatch: (slug) => ({
             isMatch: slug === organization.slug,
@@ -339,19 +335,19 @@ export default function Page() {
             </div>
 
             <div>
-              <Form method="post" {...renameForm.props}>
+              <Form method="post" {...getFormProps(renameForm)}>
                 <input type="hidden" name="action" value="rename" />
                 <Fieldset className="gap-y-0">
                   <InputGroup fullWidth>
                     <Label htmlFor={organizationName.id}>Organization name</Label>
                     <Input
-                      {...conform.input(organizationName, { type: "text" })}
+                      {...getInputProps(organizationName, { type: "text" })}
                       defaultValue={organization.title}
                       placeholder="Your organization name"
                       icon={FolderIcon}
                       autoFocus
                     />
-                    <FormError id={organizationName.errorId}>{organizationName.error}</FormError>
+                    <FormError id={organizationName.errorId}>{organizationName.errors}</FormError>
                   </InputGroup>
                   <FormButtons
                     confirmButton={
@@ -374,7 +370,7 @@ export default function Page() {
               <Header2 spacing>Danger zone</Header2>
               <Form
                 method="post"
-                {...deleteForm.props}
+                {...getFormProps(deleteForm)}
                 className="w-full rounded-sm border border-rose-500/40"
               >
                 <input type="hidden" name="action" value="delete" />
@@ -382,13 +378,13 @@ export default function Page() {
                   <InputGroup>
                     <Label htmlFor={organizationSlug.id}>Delete organization</Label>
                     <Input
-                      {...conform.input(organizationSlug, { type: "text" })}
+                      {...getInputProps(organizationSlug, { type: "text" })}
                       placeholder="Your organization slug"
                       icon={ExclamationTriangleIcon}
                       fullWidth
                     />
-                    <FormError id={organizationSlug.errorId}>{organizationSlug.error}</FormError>
-                    <FormError>{deleteForm.error}</FormError>
+                    <FormError id={organizationSlug.errorId}>{organizationSlug.errors}</FormError>
+                    <FormError>{deleteForm.errors}</FormError>
                     <Hint>
                       This change is irreversible, so please be certain. Type in the Organization
                       slug <InlineCode variant="extra-small">{organization.slug}</InlineCode> and
@@ -426,7 +422,7 @@ function LogoForm({
   const navigation = useNavigation();
 
   const avatar = navigation.formData
-    ? avatarFromFormData(navigation.formData) ?? organization.avatar
+    ? (avatarFromFormData(navigation.formData) ?? organization.avatar)
     : organization.avatar;
 
   const hex =
@@ -559,8 +555,7 @@ function LogoForm({
                         "border-charcoal-775 hover:border-charcoal-600"
                     )}
                     style={{
-                      borderColor:
-                        avatar.type === "icon" && avatar.name === name ? hex : undefined,
+                      borderColor: avatar.type === "icon" && avatar.name === name ? hex : undefined,
                     }}
                   >
                     <Avatar
@@ -585,7 +580,9 @@ function LogoForm({
 function HexPopover({ avatar, hex }: { avatar: Avatar; hex: string }) {
   return (
     <Popover>
-      <PopoverTrigger className={cn(iconTileClass, "border-charcoal-775 hover:border-charcoal-600")}>
+      <PopoverTrigger
+        className={cn(iconTileClass, "border-charcoal-775 hover:border-charcoal-600")}
+      >
         <img src={colorWheelIcon} className="m-0 block size-[30px] p-0" />
       </PopoverTrigger>
       <PopoverContent
@@ -595,7 +592,11 @@ function HexPopover({ avatar, hex }: { avatar: Avatar; hex: string }) {
       >
         <Form method="post" className="flex w-fit min-w-40 flex-col gap-1">
           <input type="hidden" name="action" value="avatar" />
-          <input type="hidden" name="type" value={avatar.type === "image" ? "letters" : avatar.type} />
+          <input
+            type="hidden"
+            name="type"
+            value={avatar.type === "image" ? "letters" : avatar.type}
+          />
           {avatar.type === "icon" && <input type="hidden" name="name" value={avatar.name} />}
           {defaultAvatarColors.map((color) => (
             <Button
@@ -646,7 +647,8 @@ function RadioDot({ active }: { active: boolean }) {
   );
 }
 
-const iconTileClass = "box-content grid size-10 shrink-0 place-items-center rounded-sm border-2 bg-charcoal-775";
+const iconTileClass =
+  "box-content grid size-10 shrink-0 place-items-center rounded-sm border-2 bg-charcoal-775";
 
 function toRecord(json: unknown): Record<string, unknown> {
   return json && typeof json === "object" ? (json as Record<string, unknown>) : {};

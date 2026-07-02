@@ -68,7 +68,7 @@ function ChartsDashboard() {
     [dateRange?.startDate, dateRange?.endDate]
   );
 
-  const filteredBarData2 = useMemo(
+  const _filteredBarData2 = useMemo(
     () =>
       filterDataByDateRange(API_DATA.barChartData, "day", dateRange?.startDate, dateRange?.endDate),
     [dateRange?.startDate, dateRange?.endDate]
@@ -167,7 +167,6 @@ function ChartsDashboard() {
             </Chart.Root>
           </Card.Content>
         </Card>
-
 
         {/* Simple Line Chart (no zoom, but synced with date range) */}
         <Card>

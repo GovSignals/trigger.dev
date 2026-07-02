@@ -1,11 +1,10 @@
 import { Form, useActionData, useNavigate } from "@remix-run/react";
 import { redirect } from "@remix-run/server-runtime";
+import { useState } from "react";
 import { typedjson, useTypedLoaderData } from "remix-typedjson";
 import { z } from "zod";
-import { useState } from "react";
 import { Button, LinkButton } from "~/components/primitives/Buttons";
 import { Input } from "~/components/primitives/Input";
-import { Paragraph } from "~/components/primitives/Paragraph";
 import { prisma } from "~/db.server";
 import { dashboardAction, dashboardLoader } from "~/services/routeBuilders/dashboardBuilder";
 import { llmPricingRegistry } from "~/v3/llmPricingRegistry.server";
@@ -74,7 +73,10 @@ export const action = dashboardAction(
       const parsed = SaveSchema.safeParse(raw);
 
       if (!parsed.success) {
-        return typedjson({ error: "Invalid form data", details: parsed.error.issues }, { status: 400 });
+        return typedjson(
+          { error: "Invalid form data", details: parsed.error.issues },
+          { status: 400 }
+        );
       }
 
       const { modelName, matchPattern, pricingTiersJson } = parsed.data;
@@ -102,7 +104,15 @@ export const action = dashboardAction(
       }
 
       // Update model
-      const { provider, description, contextWindow, maxOutputTokens, capabilities, isHidden, pricingUnit } = parsed.data;
+      const {
+        provider,
+        description,
+        contextWindow,
+        maxOutputTokens,
+        capabilities,
+        isHidden,
+        pricingUnit,
+      } = parsed.data;
       await prisma.llmModel.update({
         where: { id: modelId },
         data: {
@@ -112,7 +122,12 @@ export const action = dashboardAction(
           description: description || null,
           contextWindow: contextWindow ? parseInt(contextWindow) || null : null,
           maxOutputTokens: maxOutputTokens ? parseInt(maxOutputTokens) || null : null,
-          capabilities: capabilities ? capabilities.split(",").map((s) => s.trim()).filter(Boolean) : [],
+          capabilities: capabilities
+            ? capabilities
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
+            : [],
           isHidden: isHidden === "on",
           pricingUnit: pricingUnit || null,
         },
@@ -150,7 +165,7 @@ export const action = dashboardAction(
 export default function AdminLlmModelDetailRoute() {
   const { model } = useTypedLoaderData<typeof loader>();
   const actionData = useActionData<{ success?: boolean; error?: string; details?: unknown[] }>();
-  const navigate = useNavigate();
+  const _navigate = useNavigate();
 
   const [modelName, setModelName] = useState(model.modelName);
   const [matchPattern, setMatchPattern] = useState(model.matchPattern);
@@ -180,9 +195,7 @@ export default function AdminLlmModelDetailRoute() {
   let testResult: boolean | null = null;
   if (testInput) {
     try {
-      const pattern = matchPattern.startsWith("(?i)")
-        ? matchPattern.slice(4)
-        : matchPattern;
+      const pattern = matchPattern.startsWith("(?i)") ? matchPattern.slice(4) : matchPattern;
       testResult = new RegExp(pattern, "i").test(testInput);
     } catch {
       testResult = null;
@@ -316,7 +329,9 @@ export default function AdminLlmModelDetailRoute() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-text-dimmed">Features (comma-separated)</label>
+                  <label className="text-xs font-medium text-text-dimmed">
+                    Features (comma-separated)
+                  </label>
                   <Input
                     name="capabilities"
                     value={capabilities}
@@ -419,9 +434,12 @@ export default function AdminLlmModelDetailRoute() {
 
         {/* Delete section */}
         <div className="border-t border-grid-dimmed pt-4">
-          <Form method="post" onSubmit={(e) => {
-            if (!confirm(`Delete model "${model.modelName}"?`)) e.preventDefault();
-          }}>
+          <Form
+            method="post"
+            onSubmit={(e) => {
+              if (!confirm(`Delete model "${model.modelName}"?`)) e.preventDefault();
+            }}
+          >
             <input type="hidden" name="_action" value="delete" />
             <Button type="submit" variant="danger/small">
               Delete model
@@ -445,7 +463,15 @@ type TierData = {
   prices: Record<string, number>;
 };
 
-const PRICING_UNITS = ["tokens", "characters", "images", "minutes", "requests", "free", "not_findable"];
+const PRICING_UNITS = [
+  "tokens",
+  "characters",
+  "images",
+  "minutes",
+  "requests",
+  "free",
+  "not_findable",
+];
 
 const COMMON_USAGE_TYPES = [
   "input",
@@ -505,9 +531,7 @@ function TierEditor({
 
       {/* Prices */}
       <div className="space-y-1">
-        <span className="text-xs font-medium text-text-dimmed">
-          Prices (per token)
-        </span>
+        <span className="text-xs font-medium text-text-dimmed">Prices (per token)</span>
         <div className="space-y-1">
           {Object.entries(tier.prices).map(([usageType, price]) => (
             <div key={usageType} className="flex items-center gap-2">
@@ -561,9 +585,7 @@ function TierEditor({
               variant="tertiary/small"
               onClick={() => {
                 const key =
-                  newUsageType === "__custom"
-                    ? prompt("Usage type name:") ?? ""
-                    : newUsageType;
+                  newUsageType === "__custom" ? (prompt("Usage type name:") ?? "") : newUsageType;
                 if (key) {
                   onChange({
                     ...tier,

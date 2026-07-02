@@ -1,10 +1,15 @@
-import type { BillingCache } from "../billingCache.js";
 import { startSpan } from "@internal/tracing";
 import { assertExhaustive, tryCatch } from "@trigger.dev/core";
-import { DequeuedMessage, RetryOptions, RunAnnotations } from "@trigger.dev/core/v3";
-import { placementTag } from "@trigger.dev/core/v3/serverOnly";
-import { generateInternalId, getMaxDuration, SnapshotId } from "@trigger.dev/core/v3/isomorphic";
+import type { DequeuedMessage } from "@trigger.dev/core/v3";
+import { RetryOptions, RunAnnotations } from "@trigger.dev/core/v3";
 import {
+  CURRENT_DEPLOYMENT_LABEL,
+  generateInternalId,
+  getMaxDuration,
+  SnapshotId,
+} from "@trigger.dev/core/v3/isomorphic";
+import { placementTag } from "@trigger.dev/core/v3/serverOnly";
+import type {
   BackgroundWorker,
   BackgroundWorkerTask,
   Prisma,
@@ -12,15 +17,16 @@ import {
   TaskQueue,
   WorkerDeployment,
 } from "@trigger.dev/database";
-import { CURRENT_DEPLOYMENT_LABEL } from "@trigger.dev/core/v3/isomorphic";
+import type { BillingCache } from "../billingCache.js";
 
 import { sendNotificationToWorker } from "../eventBus.js";
 import { getMachinePreset } from "../machinePresets.js";
 import { isDequeueableExecutionStatus, isExecuting } from "../statuses.js";
-import { RunEngineOptions } from "../types.js";
-import { ExecutionSnapshotSystem, getLatestExecutionSnapshot } from "./executionSnapshotSystem.js";
-import { RunAttemptSystem } from "./runAttemptSystem.js";
-import { SystemResources } from "./systems.js";
+import type { RunEngineOptions } from "../types.js";
+import type { ExecutionSnapshotSystem } from "./executionSnapshotSystem.js";
+import { getLatestExecutionSnapshot } from "./executionSnapshotSystem.js";
+import type { RunAttemptSystem } from "./runAttemptSystem.js";
+import type { SystemResources } from "./systems.js";
 
 export type DequeueSystemOptions = {
   resources: SystemResources;
@@ -419,17 +425,14 @@ export class DequeueSystem {
               // Pre-generate snapshot ID so we can construct the result without an extra read
               const snapshotId = generateInternalId();
 
-              const lockedTaskRun = await prisma.taskRun.update({
-                where: {
-                  id: runId,
-                },
-                data: {
+              const lockedTaskRun = await this.$.runStore.lockRunToWorker(
+                runId,
+                {
                   lockedAt,
                   lockedById: result.task.id,
                   lockedToVersionId: result.worker.id,
                   lockedQueueId: result.queue.id,
                   lockedRetryConfig: lockedRetryConfig ?? undefined,
-                  status: "DEQUEUED",
                   startedAt,
                   baseCostInCents: this.options.machines.baseCostInCents,
                   machinePreset: machinePreset.name,
@@ -438,38 +441,27 @@ export class DequeueSystem {
                   cliVersion: result.worker.cliVersion,
                   maxDurationInSeconds,
                   maxAttempts: maxAttempts ?? undefined,
-                  executionSnapshots: {
-                    create: {
-                      id: snapshotId,
-                      engine: "V2",
-                      executionStatus: "PENDING_EXECUTING",
-                      description: "Run was dequeued for execution",
-                      // Map DEQUEUED -> PENDING for backwards compatibility with older runners
-                      runStatus: "PENDING",
-                      attemptNumber: result.run.attemptNumber ?? undefined,
-                      previousSnapshotId: snapshot.id,
-                      environmentId: snapshot.environmentId,
-                      environmentType: snapshot.environmentType,
-                      projectId: snapshot.projectId,
-                      organizationId: snapshot.organizationId,
-                      checkpointId: snapshot.checkpointId ?? undefined,
-                      batchId: snapshot.batchId ?? undefined,
-                      completedWaitpoints: {
-                        connect: snapshot.completedWaitpoints.map((w) => ({ id: w.id })),
-                      },
-                      completedWaitpointOrder: snapshot.completedWaitpoints
-                        .filter((c) => c.index !== undefined)
-                        .sort((a, b) => a.index! - b.index!)
-                        .map((w) => w.id),
-                      workerId,
-                      runnerId,
-                    },
+                  snapshot: {
+                    id: snapshotId,
+                    previousSnapshotId: snapshot.id,
+                    attemptNumber: result.run.attemptNumber ?? undefined,
+                    environmentId: snapshot.environmentId,
+                    environmentType: snapshot.environmentType,
+                    projectId: snapshot.projectId,
+                    organizationId: snapshot.organizationId,
+                    checkpointId: snapshot.checkpointId ?? undefined,
+                    batchId: snapshot.batchId ?? undefined,
+                    completedWaitpointIds: snapshot.completedWaitpoints.map((w) => w.id),
+                    completedWaitpointOrder: snapshot.completedWaitpoints
+                      .filter((c) => c.index !== undefined)
+                      .sort((a, b) => a.index! - b.index!)
+                      .map((w) => w.id),
+                    workerId,
+                    runnerId,
                   },
                 },
-                include: {
-                  runtimeEnvironment: true,
-                },
-              });
+                prisma
+              );
 
               this.$.eventBus.emit("runLocked", {
                 time: new Date(),
@@ -655,12 +647,15 @@ export class DequeueSystem {
 
           // Wrap the Prisma call with tryCatch - if DB is unavailable, we still want to nack via Redis
           const [findError, run] = await tryCatch(
-            prisma.taskRun.findFirst({
-              where: { id: runId },
-              include: {
-                runtimeEnvironment: true,
+            this.$.runStore.findRun(
+              { id: runId },
+              {
+                include: {
+                  runtimeEnvironment: true,
+                },
               },
-            })
+              prisma
+            )
           );
 
           // If DB is unavailable or run not found, just nack directly via Redis
@@ -741,30 +736,32 @@ export class DequeueSystem {
       });
 
       //mark run as waiting for deploy
-      const run = await prisma.taskRun.update({
-        where: { id: runId },
-        data: {
-          status: "PENDING_VERSION",
+      const run = await this.$.runStore.parkPendingVersion(
+        runId,
+        {
           statusReason,
         },
-        select: {
-          id: true,
-          status: true,
-          attemptNumber: true,
-          updatedAt: true,
-          createdAt: true,
-          runTags: true,
-          batchId: true,
-          runtimeEnvironment: {
-            select: {
-              id: true,
-              type: true,
-              projectId: true,
-              project: { select: { id: true, organizationId: true } },
+        {
+          select: {
+            id: true,
+            status: true,
+            attemptNumber: true,
+            updatedAt: true,
+            createdAt: true,
+            runTags: true,
+            batchId: true,
+            runtimeEnvironment: {
+              select: {
+                id: true,
+                type: true,
+                projectId: true,
+                project: { select: { id: true, organizationId: true } },
+              },
             },
           },
         },
-      });
+        prisma
+      );
 
       this.$.logger.debug("RunEngine.dequeueFromWorkerQueue(): Pending version", {
         runId,
@@ -820,26 +817,29 @@ export class DequeueSystem {
     return startSpan(this.$.tracer, "getRunWithBackgroundWorkerTasks", async (span) => {
       span.setAttribute("run_id", runId);
 
-      const run = await prisma.taskRun.findFirst({
-        where: {
+      const run = await this.$.runStore.findRun(
+        {
           id: runId,
         },
-        include: {
-          runtimeEnvironment: {
-            select: {
-              id: true,
-              type: true,
-              archivedAt: true,
+        {
+          include: {
+            runtimeEnvironment: {
+              select: {
+                id: true,
+                type: true,
+                archivedAt: true,
+              },
             },
-          },
-          lockedToVersion: {
-            include: {
-              deployment: true,
-              tasks: true,
+            lockedToVersion: {
+              include: {
+                deployment: true,
+                tasks: true,
+              },
             },
           },
         },
-      });
+        prisma
+      );
 
       if (!run) {
         span.setAttribute("result", "NO_RUN");

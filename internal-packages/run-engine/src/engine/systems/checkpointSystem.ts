@@ -1,16 +1,20 @@
-import { CheckpointInput, CreateCheckpointResult, ExecutionResult } from "@trigger.dev/core/v3";
+import type {
+  CheckpointInput,
+  CreateCheckpointResult,
+  ExecutionResult,
+} from "@trigger.dev/core/v3";
 import { CheckpointId } from "@trigger.dev/core/v3/isomorphic";
-import { PrismaClientOrTransaction } from "@trigger.dev/database";
+import type { PrismaClientOrTransaction } from "@trigger.dev/database";
 import { sendNotificationToWorker } from "../eventBus.js";
 import { isCheckpointable, isPendingExecuting } from "../statuses.js";
+import type { ExecutionSnapshotSystem } from "./executionSnapshotSystem.js";
 import {
   getLatestExecutionSnapshot,
   executionResultFromSnapshot,
-  ExecutionSnapshotSystem,
 } from "./executionSnapshotSystem.js";
-import { SystemResources } from "./systems.js";
+import type { SystemResources } from "./systems.js";
 import { ServiceValidationError } from "../errors.js";
-import { EnqueueSystem } from "./enqueueSystem.js";
+import type { EnqueueSystem } from "./enqueueSystem.js";
 
 export type CheckpointSystemOptions = {
   resources: SystemResources;
@@ -115,22 +119,20 @@ export class CheckpointSystem {
       }
 
       // Get the run and update the status
-      const run = await this.$.prisma.taskRun.update({
-        where: {
-          id: runId,
-        },
-        data: {
-          status: "WAITING_TO_RESUME",
-        },
-        include: {
-          runtimeEnvironment: {
-            include: {
-              project: true,
-              organization: true,
+      const run = await this.$.runStore.suspendForCheckpoint(
+        runId,
+        {
+          include: {
+            runtimeEnvironment: {
+              include: {
+                project: true,
+                organization: true,
+              },
             },
           },
         },
-      });
+        this.$.prisma
+      );
 
       if (!run) {
         this.$.logger.error("Run not found for createCheckpoint", {
@@ -294,26 +296,24 @@ export class CheckpointSystem {
       }
 
       // Get the run and update the status
-      const run = await this.$.prisma.taskRun.update({
-        where: {
-          id: runId,
+      const run = await this.$.runStore.resumeFromCheckpoint(
+        runId,
+        {
+          select: {
+            id: true,
+            status: true,
+            attemptNumber: true,
+            organizationId: true,
+            runtimeEnvironmentId: true,
+            projectId: true,
+            updatedAt: true,
+            createdAt: true,
+            runTags: true,
+            batchId: true,
+          },
         },
-        data: {
-          status: "EXECUTING",
-        },
-        select: {
-          id: true,
-          status: true,
-          attemptNumber: true,
-          organizationId: true,
-          runtimeEnvironmentId: true,
-          projectId: true,
-          updatedAt: true,
-          createdAt: true,
-          runTags: true,
-          batchId: true,
-        },
-      });
+        this.$.prisma
+      );
 
       if (!run) {
         this.$.logger.error("Run not found for createCheckpoint", {

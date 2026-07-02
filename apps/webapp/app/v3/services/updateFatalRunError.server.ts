@@ -1,7 +1,8 @@
 import { BaseService } from "./baseService.server";
 import { logger } from "~/services/logger.server";
 import { isFatalRunStatus } from "../taskStatus";
-import { TaskRunErrorCodes, TaskRunInternalError } from "@trigger.dev/core/v3";
+import type { TaskRunInternalError } from "@trigger.dev/core/v3";
+import { TaskRunErrorCodes } from "@trigger.dev/core/v3";
 import { FinalizeTaskRunService } from "./finalizeTaskRun.server";
 
 export type UpdateFatalRunErrorServiceOptions = {
@@ -20,11 +21,7 @@ export class UpdateFatalRunErrorService extends BaseService {
 
     logger.debug("UpdateFatalRunErrorService.call", { runId, opts });
 
-    const taskRun = await this._prisma.taskRun.findFirst({
-      where: {
-        id: runId,
-      },
-    });
+    const taskRun = await this.runStore.findRun({ id: runId }, this._prisma);
 
     if (!taskRun) {
       logger.error("[UpdateFatalRunErrorService] Task run not found", { runId });

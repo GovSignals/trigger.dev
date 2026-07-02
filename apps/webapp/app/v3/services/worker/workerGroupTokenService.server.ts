@@ -1,34 +1,40 @@
-import { createCache, createLRUMemoryStore, DefaultStatefulContext, Namespace } from "@internal/cache";
 import {
+  createCache,
+  createLRUMemoryStore,
+  DefaultStatefulContext,
+  Namespace,
+} from "@internal/cache";
+import type {
   CheckpointInput,
   CompleteRunAttemptResult,
   DequeuedMessage,
   ExecutionResult,
   MachinePreset,
-  SemanticInternalAttributes,
   StartRunAttemptResult,
   TaskRunExecutionResult,
 } from "@trigger.dev/core/v3";
+import { SemanticInternalAttributes } from "@trigger.dev/core/v3";
 import { fromFriendlyId } from "@trigger.dev/core/v3/isomorphic";
 import { WORKER_HEADERS, type WorkerQueueClass } from "@trigger.dev/core/v3/workers";
-import {
-  Prisma,
-  RuntimeEnvironment,
-  WorkerInstanceGroup,
-  WorkerInstanceGroupType,
-} from "@trigger.dev/database";
+import type { RuntimeEnvironment, WorkerInstanceGroup } from "@trigger.dev/database";
+import { Prisma, WorkerInstanceGroupType } from "@trigger.dev/database";
 import { createHash, timingSafeEqual } from "crypto";
 import { customAlphabet } from "nanoid";
 import { z } from "zod";
 import { env } from "~/env.server";
+import {
+  isWorkerQueueDequeueDisabled,
+  recordBlockedDequeue,
+} from "~/runEngine/concerns/dequeueGate.server";
+import { workerQueueForClass } from "~/runEngine/concerns/workerQueueSplit.server";
 import { generateJWTTokenForEnvironment } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
 import { defaultMachine } from "~/services/platform.v3.server";
 import { singleton } from "~/utils/singleton";
 import { resolveVariablesForEnvironment } from "~/v3/environmentVariables/environmentVariablesRepository.server";
 import { machinePresetFromName } from "~/v3/machinePresets.server";
-import { workerQueueForClass } from "~/runEngine/concerns/workerQueueSplit.server";
-import { WithRunEngine, WithRunEngineOptions } from "../baseService.server";
+import type { WithRunEngineOptions } from "../baseService.server";
+import { WithRunEngine } from "../baseService.server";
 
 const authenticatedWorkerInstanceCache = singleton(
   "authenticatedWorkerInstanceCache",
@@ -299,7 +305,7 @@ export class WorkerGroupTokenService extends WithRunEngine {
             });
 
             return existingWorkerInstance;
-          } catch (error) {
+          } catch (_error) {
             logger.error("[WorkerGroupTokenService] Failed to find worker instance", {
               workerGroup,
               workerInstance,
@@ -326,10 +332,6 @@ export class WorkerGroupTokenService extends WithRunEngine {
 
 export const WorkerInstanceEnv = z.enum(["dev", "staging", "prod"]).default("prod");
 export type WorkerInstanceEnv = z.infer<typeof WorkerInstanceEnv>;
-
-type EnvironmentWithParent = RuntimeEnvironment & {
-  parentEnvironment?: RuntimeEnvironment | null;
-};
 
 export type AuthenticatedWorkerInstanceOptions = WithRunEngineOptions<{
   type: WorkerInstanceGroupType;
@@ -377,11 +379,16 @@ export class AuthenticatedWorkerInstance extends WithRunEngine {
     runnerId?: string;
     queueClass?: WorkerQueueClass;
   }): Promise<DequeuedMessage[]> {
-    // Derive the actual queue from this worker's own masterQueue + class, so a
-    // token can only ever reach its own region's queues (default or :scheduled).
+    const workerQueue = workerQueueForClass(this.masterQueue, queueClass);
+
+    if (isWorkerQueueDequeueDisabled(workerQueue)) {
+      recordBlockedDequeue(workerQueue);
+      return [];
+    }
+
     return await this._engine.dequeueFromWorkerQueue({
       consumerId: this.workerInstanceId,
-      workerQueue: workerQueueForClass(this.masterQueue, queueClass),
+      workerQueue,
       workerId: this.workerInstanceId,
       runnerId,
     });

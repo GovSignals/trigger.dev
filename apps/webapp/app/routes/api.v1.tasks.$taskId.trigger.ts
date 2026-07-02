@@ -5,11 +5,12 @@ import {
   RunEngineVersionSchema,
   TriggerTaskRequestBody,
 } from "@trigger.dev/core/v3";
-import { TaskRun } from "@trigger.dev/database";
+import type { TaskRun } from "@trigger.dev/database";
 import { z } from "zod";
 import { prisma } from "~/db.server";
 import { env } from "~/env.server";
-import { ApiAuthenticationResultSuccess, getOneTimeUseToken } from "~/services/apiAuth.server";
+import type { ApiAuthenticationResultSuccess } from "~/services/apiAuth.server";
+import { getOneTimeUseToken } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
 import { extractJwtSigningSecretKey } from "~/services/realtime/jwtAuth.server";
 import { determineRealtimeStreamsVersion } from "~/services/realtime/v1StreamsGlobal.server";
@@ -20,6 +21,7 @@ import {
   saveRequestIdempotency,
 } from "~/utils/requestIdempotency.server";
 import { sanitizeTriggerSource } from "~/utils/triggerSource";
+import { runStore } from "~/v3/runStore.server";
 import { ServiceValidationError } from "~/v3/services/baseService.server";
 import { OutOfEntitlementError, TriggerTaskService } from "~/v3/services/triggerTask.server";
 
@@ -67,7 +69,7 @@ const { action, loader } = createActionApiRoute(
       traceparent,
       tracestate,
       "x-trigger-worker": isFromWorker,
-      "x-trigger-client": triggerClient,
+      "x-trigger-client": _triggerClient,
       "x-trigger-engine-version": engineVersion,
       "x-trigger-request-idempotency-key": requestIdempotencyKey,
       "x-trigger-realtime-streams-version": realtimeStreamsVersion,
@@ -77,14 +79,17 @@ const { action, loader } = createActionApiRoute(
     const cachedResponse = await handleRequestIdempotency(requestIdempotencyKey, {
       requestType: "trigger",
       findCachedEntity: async (cachedRequestId) => {
-        return await prisma.taskRun.findFirst({
-          where: {
+        return await runStore.findRun(
+          {
             id: cachedRequestId,
           },
-          select: {
-            friendlyId: true,
+          {
+            select: {
+              friendlyId: true,
+            },
           },
-        });
+          prisma
+        );
       },
       buildResponse: (cachedRun) => ({
         id: cachedRun.friendlyId,
@@ -124,7 +129,9 @@ const { action, loader } = createActionApiRoute(
           realtimeStreamsVersion: determineRealtimeStreamsVersion(
             realtimeStreamsVersion ?? undefined
           ),
-          triggerSource: isFromWorker ? "sdk" : sanitizeTriggerSource(triggerSourceHeader) ?? "api",
+          triggerSource: isFromWorker
+            ? "sdk"
+            : (sanitizeTriggerSource(triggerSourceHeader) ?? "api"),
           triggerAction: "trigger",
         },
         engineVersion ?? undefined

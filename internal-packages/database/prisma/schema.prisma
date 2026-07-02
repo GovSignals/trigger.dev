@@ -112,6 +112,7 @@ enum AuthenticationMethod {
   GITHUB
   MAGIC_LINK
   GOOGLE
+  SSO
 }
 
 /// Used to generate PersonalAccessTokens, they're one-time use
@@ -211,7 +212,7 @@ model Organization {
 
   runsEnabled Boolean @default(true)
 
-  v3Enabled Boolean @default(false)
+  isActivated Boolean @default(false) @map("v3Enabled")
 
   /// @deprecated
   v2Enabled      Boolean @default(false)
@@ -323,6 +324,7 @@ model RuntimeEnvironment {
 
   // Preview branches
   /// If true, this environment has branches and is treated differently in the dashboard/API
+  /// NB: this flag is NOT used for Development branches, instead (type, parentEnvironmentId) = (DEVELOPMENT, NULL) is used
   isBranchableEnvironment Boolean              @default(false)
   branchName              String?
   parentEnvironment       RuntimeEnvironment?  @relation("parentEnvironment", fields: [parentEnvironmentId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -341,6 +343,7 @@ model RuntimeEnvironment {
   maximumConcurrencyLimit     Int     @default(5)
   concurrencyLimitBurstFactor Decimal @default("2.00") @db.Decimal(4, 2)
   paused                      Boolean @default(false)
+  pauseSource                 EnvironmentPauseSource?
 
   autoEnableInternalSources Boolean @default(true)
 
@@ -418,6 +421,10 @@ enum RuntimeEnvironmentType {
   STAGING
   DEVELOPMENT
   PREVIEW
+}
+
+enum EnvironmentPauseSource {
+  BILLING_LIMIT
 }
 
 model Project {
@@ -804,6 +811,10 @@ model Session {
   /// (chatId, messages, trigger) are merged at trigger time.
   triggerConfig Json
 
+  /// Whether this session was created from the Test/playground UI rather
+  /// than by a real chat.agent() trigger. Mirrors TaskRun.isTest.
+  isTest Boolean @default(false)
+
   tags     String[] @default([])
   metadata Json?
 
@@ -914,6 +925,9 @@ model TaskRun {
 
   /// The main queue that this run is part of
   workerQueue String @default("main") @map("masterQueue")
+
+  /// User-facing geo region, stamped at trigger; workerQueue is where it actually ran.
+  region String?
 
   /// @deprecated
   secondaryMasterQueue String?
@@ -1531,6 +1545,9 @@ model WorkerInstanceGroup {
   staticIPs     String?
 
   workloadType WorkloadType @default(CONTAINER)
+
+  /// Geo region; container + MICROVM groups for one geo share it. Set-once once it has runs.
+  region String?
 
   /// When true, runs enqueued to this worker queue may skip the intermediate queue
   /// and be pushed directly to the worker queue when concurrency is available.
@@ -2480,6 +2497,8 @@ model BulkActionGroup {
   queryName    String?
   /// The params that will be passed to the query
   params       Json?
+  /// Billing-limit dedupe key (grace hitAt or resolve job key). Null for dashboard bulk actions.
+  dedupeKey    String?
   /// The cursor that will be passed to the query (null for the first page)
   cursor       Json?
   /// The number of runs that have been processed successfully
@@ -2505,6 +2524,12 @@ model BulkActionGroup {
   updatedAt DateTime @updatedAt
 
   @@index([environmentId, createdAt(sort: Desc)])
+  // NOTE: the real index is PARTIAL (`WHERE "dedupeKey" IS NOT NULL`) and created
+  // CONCURRENTLY — see migration 20260626120001_bulk_action_group_dedupe_key_index.
+  // Prisma can't express partial indexes, so this @@index is an approximation (as with
+  // the INCLUDE/fillfactor indexes elsewhere in this schema). `migrate dev` will report
+  // drift here; do NOT accept its drop/recreate — keep the hand-written migration.
+  @@index([environmentId, type, dedupeKey])
 }
 
 enum BulkActionType {

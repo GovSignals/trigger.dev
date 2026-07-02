@@ -16,6 +16,10 @@ import { tryCatch } from "@trigger.dev/core";
 import { getRegistryConfig } from "../registryConfig.server";
 import { DeploymentService } from "./deployment.server";
 import { createDeploymentWithNextVersion } from "./initializeDeployment/createDeploymentWithNextVersion.server";
+import {
+  ImageReferenceMismatchError,
+  resolveOverrideImageRef,
+} from "./initializeDeployment/resolveDeploymentImageRef";
 import { errAsync } from "neverthrow";
 
 const nanoid = customAlphabet("1234567890abcdefghijklmnopqrstuvwxyz", 8);
@@ -200,11 +204,27 @@ export class InitializeDeploymentService extends BaseService {
           const [imageRefError, imageRefResult] = await tryCatch(
             (async () => {
               if (env.DEPLOY_IMAGE_OVERRIDE) {
-                return {
-                  imageRef: env.DEPLOY_IMAGE_OVERRIDE,
-                  isEcr: false,
-                  repoCreated: false,
-                };
+                // The override is the opt-in switch for the pre-built-image
+                // flow. When the caller supplies its own canonical
+                // imageReference (constrained to the override's
+                // registry/repository), honor it so the stamped image is
+                // deterministic instead of a function of this pod's boot-time
+                // override snapshot.
+                try {
+                  return {
+                    imageRef: resolveOverrideImageRef({
+                      override: env.DEPLOY_IMAGE_OVERRIDE,
+                      clientImageReference: payload.imageReference,
+                    }),
+                    isEcr: false,
+                    repoCreated: false,
+                  };
+                } catch (error) {
+                  if (error instanceof ImageReferenceMismatchError) {
+                    throw new ServiceValidationError(error.message);
+                  }
+                  throw error;
+                }
               }
 
               return getDeploymentImageRef({
@@ -226,6 +246,12 @@ export class InitializeDeploymentService extends BaseService {
               type: payload.type,
               cause: imageRefError.message,
             });
+            // Surface a deliberate validation failure (e.g. a client
+            // imageReference that doesn't match the override repository) with
+            // its specific message rather than the generic fallback.
+            if (imageRefError instanceof ServiceValidationError) {
+              throw imageRefError;
+            }
             throw new ServiceValidationError("Failed to get deployment image ref");
           }
 

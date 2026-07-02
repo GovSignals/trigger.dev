@@ -667,6 +667,14 @@ const InitializeDeploymentRequestBodyBase = z.object({
   isLocalBuild: z.boolean().optional(),
   triggeredVia: DeploymentTriggeredVia.optional(),
   buildId: z.string().optional(),
+  /**
+   * Caller-supplied canonical image reference. Only honored by single-tenant
+   * installs that set `DEPLOY_IMAGE_OVERRIDE`, and only when it shares the
+   * override's registry/repository. Lets a pre-built-image deploy flow stamp a
+   * deterministic image instead of depending on the webapp pod's boot-time
+   * override snapshot. Ignored by stock multi-tenant builds.
+   */
+  imageReference: z.string().optional(),
 });
 type BaseOutput = z.output<typeof InitializeDeploymentRequestBodyBase>;
 

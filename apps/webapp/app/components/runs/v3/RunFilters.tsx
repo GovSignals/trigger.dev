@@ -1,7 +1,6 @@
 import * as Ariakit from "@ariakit/react";
 import {
   CalendarIcon,
-  ClockIcon,
   CpuChipIcon,
   FingerPrintIcon,
   GlobeAltIcon,
@@ -12,16 +11,18 @@ import {
   XMarkIcon,
 } from "@heroicons/react/20/solid";
 import { Form, useFetcher } from "@remix-run/react";
-import { IconBugFilled, IconRotateClockwise2, IconToggleLeft } from "@tabler/icons-react";
+import { IconRotateClockwise2, IconToggleLeft } from "@tabler/icons-react";
 import { MachinePresetName } from "@trigger.dev/core/v3";
 import type { BulkActionType, TaskRunStatus, TaskTriggerSource } from "@trigger.dev/database";
 import { matchSorter } from "match-sorter";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
+import { BugIcon } from "~/assets/icons/BugIcon";
+import { ClockIcon } from "~/assets/icons/ClockIcon";
 import { ListCheckedIcon } from "~/assets/icons/ListCheckedIcon";
 import { MachineDefaultIcon } from "~/assets/icons/MachineIcon";
 import { StatusIcon } from "~/assets/icons/StatusIcon";
-import { TaskIcon } from "~/assets/icons/TaskIcon";
+import { TasksIcon } from "~/assets/icons/TasksIcon";
 import {
   formatMachinePresetName,
   MachineLabelCombo,
@@ -44,6 +45,7 @@ import {
   SelectTrigger,
   shortcutFromIndex,
 } from "~/components/primitives/Select";
+import { ShortcutKey } from "~/components/primitives/ShortcutKey";
 import { Spinner } from "~/components/primitives/Spinner";
 import { Switch } from "~/components/primitives/Switch";
 import {
@@ -57,22 +59,21 @@ import { useEnvironment } from "~/hooks/useEnvironment";
 import { useOptimisticLocation } from "~/hooks/useOptimisticLocation";
 import { useOrganization } from "~/hooks/useOrganizations";
 import { useProject } from "~/hooks/useProject";
+import { useRegions } from "~/hooks/useRegions";
 import { useSearchParams } from "~/hooks/useSearchParam";
 import { useShortcutKeys } from "~/hooks/useShortcutKeys";
-import { ShortcutKey } from "~/components/primitives/ShortcutKey";
 import { type loader as tagsLoader } from "~/routes/resources.environments.$envId.runs.tags";
 import { type loader as queuesLoader } from "~/routes/resources.orgs.$organizationSlug.projects.$projectParam.env.$envParam.queues";
-import { useRegions } from "~/hooks/useRegions";
-import { RegionLabel } from "./RegionLabel";
 import { type loader as versionsLoader } from "~/routes/resources.orgs.$organizationSlug.projects.$projectParam.env.$envParam.versions";
 import { Button } from "../../primitives/Buttons";
 import { AIFilterInput } from "./AIFilterInput";
 import { BulkActionTypeCombo } from "./BulkAction";
+import { RegionLabel } from "./RegionLabel";
 import {
-  IdFilterDropdown,
-  type IdFilterDropdownProps,
   appliedSummary,
   FilterMenuProvider,
+  IdFilterDropdown,
+  type IdFilterDropdownProps,
   TimeFilter,
   timeFilters,
 } from "./SharedFilters";
@@ -244,7 +245,7 @@ export function filterTitle(filterKey: string) {
     case "errorId":
       return "Error ID";
     case "sources":
-      return "Source";
+      return "Task type";
     default:
       return filterKey;
   }
@@ -258,7 +259,7 @@ export function filterIcon(filterKey: string): ReactNode | undefined {
     case "statuses":
       return <StatusIcon className="size-4 border-text-bright" />;
     case "tasks":
-      return <TaskIcon className="size-4" />;
+      return <TasksIcon className="size-4" />;
     case "tags":
       return <TagIcon className="size-4" />;
     case "bulkId":
@@ -286,7 +287,7 @@ export function filterIcon(filterKey: string): ReactNode | undefined {
     case "versions":
       return <IconRotateClockwise2 className="size-4" />;
     case "errorId":
-      return <IconBugFilled className="size-4" />;
+      return <BugIcon className="size-4" />;
     case "sources":
       return <CpuChipIcon className="size-4" />;
     default:
@@ -356,7 +357,11 @@ export function getRunFiltersFromSearchParams(
 }
 
 type RunFiltersProps = {
-  possibleTasks: { slug: string; triggerSource: TaskTriggerSource; isInLatestDeployment: boolean }[];
+  possibleTasks: {
+    slug: string;
+    triggerSource: TaskTriggerSource;
+    isInLatestDeployment: boolean;
+  }[];
   bulkActions: {
     id: string;
     type: BulkActionType;
@@ -423,8 +428,8 @@ const filterTypes = [
   { name: "batch", title: "Batch ID", icon: <Squares2X2Icon className="size-4" /> },
   { name: "schedule", title: "Schedule ID", icon: <ClockIcon className="size-4" /> },
   { name: "bulk", title: "Bulk action", icon: <ListCheckedIcon className="size-4" /> },
-  { name: "error", title: "Error ID", icon: <IconBugFilled className="size-4" /> },
-  { name: "source", title: "Source", icon: <CpuChipIcon className="size-4" /> },
+  { name: "error", title: "Error ID", icon: <BugIcon className="size-4" /> },
+  { name: "source", title: "Task type", icon: <TasksIcon className="size-4" /> },
 ] as const;
 
 type FilterType = (typeof filterTypes)[number]["name"];
@@ -706,7 +711,11 @@ function TasksDropdown({
   clearSearchValue: () => void;
   searchValue: string;
   onClose?: () => void;
-  possibleTasks: { slug: string; triggerSource: TaskTriggerSource; isInLatestDeployment: boolean }[];
+  possibleTasks: {
+    slug: string;
+    triggerSource: TaskTriggerSource;
+    isInLatestDeployment: boolean;
+  }[];
 }) {
   const { values, replace } = useSearchParams();
 
@@ -947,7 +956,7 @@ function AppliedBulkActionsFilter({ bulkActions }: Pick<RunFiltersProps, "bulkAc
     return null;
   }
 
-  const action = bulkActions.find((action) => action.id === bulkId);
+  const _action = bulkActions.find((action) => action.id === bulkId);
 
   return (
     <FilterMenuProvider>
@@ -1230,7 +1239,7 @@ function QueuesDropdown({
                   value={queue.value}
                   icon={
                     queue.type === "task" ? (
-                      <TaskIcon className="size-4 shrink-0 text-blue-500" />
+                      <TasksIcon className="size-4 shrink-0 text-blue-500" />
                     ) : (
                       <RectangleStackIcon className="size-4 shrink-0 text-purple-500" />
                     )
@@ -1954,18 +1963,16 @@ function SourceDropdown({
           return true;
         }}
       >
-        <ComboBox placeholder={"Filter by source..."} value={searchValue} />
+        <ComboBox placeholder={"Filter by task type…"} value={searchValue} />
         <SelectList>
           {filtered.map((item, index) => (
             <SelectItem
               key={item.value}
               value={item.value}
-              icon={
-                <TaskTriggerSourceIcon source={item.value} className="size-4 flex-none" />
-              }
+              icon={<TaskTriggerSourceIcon source={item.value} className="size-4 flex-none" />}
               shortcut={shortcutFromIndex(index, { shortcutsEnabled: true })}
             >
-              {item.title}
+              <span className="text-text-bright">{item.title}</span>
             </SelectItem>
           ))}
         </SelectList>
@@ -1989,12 +1996,10 @@ function AppliedSourceFilter() {
           trigger={
             <Ariakit.Select render={<div className="group cursor-pointer focus-custom" />}>
               <AppliedFilter
-                label="Source"
+                label="Task type"
                 icon={<CpuChipIcon className="size-4" />}
                 value={appliedSummary(
-                  sources.map(
-                    (v) => sourceOptions.find((o) => o.value === v)?.title ?? v
-                  )
+                  sources.map((v) => sourceOptions.find((o) => o.value === v)?.title ?? v)
                 )}
                 onRemove={() => del(["sources", "cursor", "direction"])}
                 variant="secondary/small"

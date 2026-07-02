@@ -2,7 +2,6 @@ import * as Ariakit from "@ariakit/react";
 import { BellAlertIcon, XMarkIcon } from "@heroicons/react/20/solid";
 import { Form, useFetcher, useRevalidator, type MetaFunction } from "@remix-run/react";
 import { type LoaderFunctionArgs } from "@remix-run/server-runtime";
-import { IconBugFilled } from "@tabler/icons-react";
 import { ErrorId } from "@trigger.dev/core/v3/isomorphic";
 import { type ErrorGroupStatus } from "@trigger.dev/database";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -16,7 +15,13 @@ import {
   type TooltipProps,
 } from "recharts";
 import { TypedAwait, typeddefer, useTypedLoaderData } from "remix-typedjson";
+import { BugIcon } from "~/assets/icons/BugIcon";
 import { ErrorStatusBadge } from "~/components/errors/ErrorStatusBadge";
+import {
+  CustomIgnoreDialog,
+  ErrorStatusMenuItems,
+  statusActionToastMessage,
+} from "~/components/errors/ErrorStatusMenu";
 import { PageBody } from "~/components/layout/AppLayout";
 import { ListPagination } from "~/components/ListPagination";
 import { LogsTaskFilter } from "~/components/logs/LogsTaskFilter";
@@ -28,9 +33,9 @@ import { formatDateTime, RelativeDateTime } from "~/components/primitives/DateTi
 import { Header3 } from "~/components/primitives/Headers";
 import { NavBar, PageTitle } from "~/components/primitives/PageHeader";
 import { Paragraph } from "~/components/primitives/Paragraph";
+import { PopoverSectionHeader } from "~/components/primitives/Popover";
 import { SearchInput } from "~/components/primitives/SearchInput";
 import {
-  ComboBox,
   SelectItem,
   SelectList,
   SelectPopover,
@@ -48,12 +53,6 @@ import {
   TableHeaderCell,
   TableRow,
 } from "~/components/primitives/Table";
-import { PopoverSectionHeader } from "~/components/primitives/Popover";
-import {
-  ErrorStatusMenuItems,
-  CustomIgnoreDialog,
-  statusActionToastMessage,
-} from "~/components/errors/ErrorStatusMenu";
 import { useToast } from "~/components/primitives/Toast";
 import { SimpleTooltip } from "~/components/primitives/Tooltip";
 import TooltipPortal from "~/components/primitives/TooltipPortal";
@@ -292,7 +291,7 @@ const errorStatusOptions = [
   { value: "IGNORED", label: "Ignored" },
 ] as const;
 
-const statusIcon = <IconBugFilled className="size-4" />;
+const statusIcon = <BugIcon className="size-4" />;
 const statusShortcut = { key: "s" };
 const timeShortcut = { key: "d" };
 const alertsShortcut = { key: "c" };
@@ -506,7 +505,7 @@ function ErrorsList({
   if (errorGroups.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3">
-        <IconBugFilled className="size-16 text-charcoal-650" />
+        <BugIcon className="size-16 text-charcoal-650" />
         <Paragraph className="text-center text-text-dimmed">
           No errors found for this time period.
         </Paragraph>

@@ -6,6 +6,7 @@ import { logger } from "./logger.server";
 import { rbac } from "./rbac.server";
 import { decryptToken, encryptToken, hashToken } from "~/utils/tokens.server";
 import { env } from "~/env.server";
+import { isUserActorToken } from "@trigger.dev/rbac";
 
 const tokenValueLength = 40;
 //lowercase only, removed 0 and l to avoid confusion
@@ -130,10 +131,7 @@ export async function updateLastAccessedAtIfStale(
   tokenId: string,
   lastAccessedAt: Date | null
 ): Promise<void> {
-  if (
-    lastAccessedAt &&
-    Date.now() - lastAccessedAt.getTime() <= PAT_LAST_ACCESSED_THROTTLE_MS
-  ) {
+  if (lastAccessedAt && Date.now() - lastAccessedAt.getTime() <= PAT_LAST_ACCESSED_THROTTLE_MS) {
     return; // fresh — no roundtrip
   }
   await prisma.personalAccessToken.updateMany({
@@ -163,6 +161,13 @@ export async function authenticateApiRequestWithPersonalAccessToken(
   const token = getPersonalAccessTokenFromRequest(request);
   if (!token) {
     return;
+  }
+
+  // A user-actor token authenticates as the user wherever a PAT does.
+  // The plugin verifies it (identity path → no org context to floor against).
+  if (isUserActorToken(token)) {
+    const result = await rbac.authenticateUserActor(request, {});
+    return result.ok ? { userId: result.userId } : undefined;
   }
 
   return authenticatePersonalAccessToken(token);

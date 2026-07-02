@@ -1,14 +1,14 @@
-import { FlushedRunMetadata, sanitizeError, TaskRunError } from "@trigger.dev/core/v3";
+import { type FlushedRunMetadata, type TaskRunError, sanitizeError } from "@trigger.dev/core/v3";
 import { type Prisma, type TaskRun } from "@trigger.dev/database";
 import { findQueueInEnvironment } from "~/models/taskQueue.server";
-import { AuthenticatedEnvironment } from "~/services/apiAuth.server";
+import type { AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
 import { updateMetadataService } from "~/services/metadata/updateMetadataInstance.server";
 import { marqs } from "~/v3/marqs/index.server";
 import { generateFriendlyId } from "../friendlyIdentifiers";
 import { socketIo } from "../handleSocketIo.server";
 import {
-  FINAL_ATTEMPT_STATUSES,
+  type FINAL_ATTEMPT_STATUSES,
   isFailedRunStatus,
   isFatalRunStatus,
   type FINAL_RUN_STATUSES,
@@ -152,22 +152,25 @@ export class FinalizeTaskRunService extends BaseService {
     if (isFatalRunStatus(run.status)) {
       logger.warn("FinalizeTaskRunService: Fatal status", { runId: run.id, status: run.status });
 
-      const extendedRun = await this._prisma.taskRun.findFirst({
-        where: { id: run.id },
-        select: {
-          id: true,
-          lockedToVersion: {
-            select: {
-              supportsLazyAttempts: true,
+      const extendedRun = await this.runStore.findRun(
+        { id: run.id },
+        {
+          select: {
+            id: true,
+            lockedToVersion: {
+              select: {
+                supportsLazyAttempts: true,
+              },
             },
-          },
-          runtimeEnvironment: {
-            select: {
-              type: true,
+            runtimeEnvironment: {
+              select: {
+                type: true,
+              },
             },
           },
         },
-      });
+        this._prisma
+      );
 
       if (extendedRun && extendedRun.runtimeEnvironment.type !== "DEVELOPMENT") {
         logger.warn("FinalizeTaskRunService: Fatal status, requesting worker exit", {

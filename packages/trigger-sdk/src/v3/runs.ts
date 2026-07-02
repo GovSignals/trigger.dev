@@ -16,13 +16,13 @@ import type {
   AsyncIterableStream,
   ApiPromise,
   RealtimeRunSkipColumns,
-} from "@trigger.dev/core/v3";
-import {
   CanceledRunResponse,
   CursorPagePromise,
   ListRunResponseItem,
   ReplayRunResponse,
   RetrieveRunResponse,
+} from "@trigger.dev/core/v3";
+import {
   accessoryAttributes,
   apiClientManager,
   flattenAttributes,
@@ -30,7 +30,7 @@ import {
   mergeRequestOptions,
 } from "@trigger.dev/core/v3";
 import { resolvePresignedPacketUrl } from "@trigger.dev/core/v3/utils/ioSerialization";
-import { AnyRunHandle, AnyTask } from "./shared.js";
+import type { AnyRunHandle, AnyTask } from "./shared.js";
 import { tracer } from "./tracer.js";
 
 export type {
@@ -160,10 +160,10 @@ function listRunsRequestOptions(
 type RunId<TRunId> = TRunId extends AnyRunHandle | AnyBatchedRunHandle
   ? TRunId
   : TRunId extends AnyTask
-  ? string
-  : TRunId extends string
-  ? TRunId
-  : never;
+    ? string
+    : TRunId extends string
+      ? TRunId
+      : never;
 
 function retrieveRun<TRunId extends AnyRunHandle | AnyBatchedRunHandle | AnyTask | string>(
   runId: RunId<TRunId>,

@@ -1,5 +1,7 @@
-import { json, TypedResponse } from "@remix-run/server-runtime";
-import { WaitForDurationRequestBody, WaitForDurationResponseBody } from "@trigger.dev/core/v3";
+import type { TypedResponse } from "@remix-run/server-runtime";
+import { json } from "@remix-run/server-runtime";
+import type { WaitForDurationResponseBody } from "@trigger.dev/core/v3";
+import { WaitForDurationRequestBody } from "@trigger.dev/core/v3";
 import { RunId } from "@trigger.dev/core/v3/isomorphic";
 
 import { z } from "zod";
@@ -8,6 +10,7 @@ import { logger } from "~/services/logger.server";
 import { createActionApiRoute } from "~/services/routeBuilders/apiBuilder.server";
 import { resolveIdempotencyKeyTTL } from "~/utils/idempotencyKeys.server";
 import { engine } from "~/v3/runEngine.server";
+import { runStore } from "~/v3/runStore.server";
 
 const { action } = createActionApiRoute(
   {
@@ -22,12 +25,13 @@ const { action } = createActionApiRoute(
     const runId = RunId.toId(runFriendlyId);
 
     try {
-      const run = await prisma.taskRun.findFirst({
-        where: {
+      const run = await runStore.findRun(
+        {
           id: runId,
           runtimeEnvironmentId: authentication.environment.id,
         },
-      });
+        prisma
+      );
 
       if (!run) {
         throw new Response("You don't have permissions for this run", { status: 401 });
@@ -45,7 +49,7 @@ const { action } = createActionApiRoute(
         idempotencyKeyExpiresAt: idempotencyKeyExpiresAt,
       });
 
-      const waitResult = await engine.blockRunWithWaitpoint({
+      const _waitResult = await engine.blockRunWithWaitpoint({
         runId: run.id,
         waitpoints: waitpoint.id,
         projectId: authentication.environment.project.id,

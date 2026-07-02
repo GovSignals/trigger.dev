@@ -4,45 +4,59 @@ import { marqs } from "~/v3/marqs/index.server";
 import assertNever from "assert-never";
 import { FailedTaskRunService } from "./failedTaskRun.server";
 import { BaseService } from "./services/baseService.server";
-import { PrismaClientOrTransaction } from "~/db.server";
+import type { PrismaClientOrTransaction } from "~/db.server";
 import { workerQueue } from "~/services/worker.server";
 import { socketIo } from "./handleSocketIo.server";
 import { TaskRunErrorCodes } from "@trigger.dev/core/v3";
+import { isV3Disabled } from "./engineDeprecation.server";
 
 export class TaskRunHeartbeatFailedService extends BaseService {
   public async call(runId: string) {
-    const taskRun = await this._prisma.taskRun.findFirst({
-      where: {
+    const taskRun = await this.runStore.findRun(
+      {
         id: runId,
       },
-      select: {
-        id: true,
-        friendlyId: true,
-        status: true,
-        lockedAt: true,
-        runtimeEnvironment: {
-          select: {
-            type: true,
+      {
+        select: {
+          id: true,
+          engine: true,
+          friendlyId: true,
+          status: true,
+          lockedAt: true,
+          runtimeEnvironment: {
+            select: {
+              type: true,
+            },
           },
-        },
-        lockedToVersion: {
-          select: {
-            supportsLazyAttempts: true,
+          lockedToVersion: {
+            select: {
+              supportsLazyAttempts: true,
+            },
           },
-        },
-        _count: {
-          select: {
-            attempts: true,
+          _count: {
+            select: {
+              attempts: true,
+            },
           },
         },
       },
-    });
+      this._prisma
+    );
 
     if (!taskRun) {
       logger.error("[TaskRunHeartbeatFailedService] Task run not found", {
         runId,
       });
 
+      return;
+    }
+
+    // v3 (engine V1) shutdown: leave abandoned V1 runs as-is instead of doing
+    // MarQS/DB work to fail or requeue them. v4 (V2) is unaffected.
+    if (isV3Disabled() && taskRun.engine === "V1") {
+      logger.debug("[TaskRunHeartbeatFailedService] Skipping heartbeat for shut-down v3 run", {
+        runId,
+      });
       return;
     }
 

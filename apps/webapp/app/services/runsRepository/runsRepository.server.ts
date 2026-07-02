@@ -7,7 +7,7 @@ import { type Prisma, TaskRunStatus } from "@trigger.dev/database";
 import parseDuration from "parse-duration";
 import { z } from "zod";
 import { timeFilters } from "~/components/runs/v3/SharedFilters";
-import { type PrismaClient, type PrismaClientOrTransaction } from "~/db.server";
+import { type PrismaClientOrTransaction } from "~/db.server";
 import { startActiveSpan } from "~/v3/tracer.server";
 import { ClickHouseRunsRepository } from "./clickhouseRunsRepository.server";
 
@@ -108,6 +108,7 @@ export type ListedRun = Prisma.TaskRunGetPayload<{
     machinePreset: true;
     queue: true;
     workerQueue: true;
+    region: true;
     annotations: true;
   };
 }>;
@@ -273,7 +274,7 @@ export async function convertRunListInputOptionsToFilterRunsOptions(
     from: options.from,
     to: options.to,
   });
-  convertedOptions.period = time.period ? parseDuration(time.period) ?? undefined : undefined;
+  convertedOptions.period = time.period ? (parseDuration(time.period) ?? undefined) : undefined;
 
   // Batch friendlyId to id
   if (options.batchId && options.batchId.startsWith("batch_")) {

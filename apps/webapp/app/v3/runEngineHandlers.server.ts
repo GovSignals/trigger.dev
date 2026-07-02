@@ -1,17 +1,18 @@
-import { CompleteBatchResult } from "@internal/run-engine";
+import type { CompleteBatchResult } from "@internal/run-engine";
 import { SpanKind } from "@internal/tracing";
 import { tryCatch } from "@trigger.dev/core/utils";
-import { createJsonErrorObject, sanitizeError } from "@trigger.dev/core/v3";
+import { createJsonErrorObject, sanitizeError, TaskRunErrorCodes } from "@trigger.dev/core/v3";
 import { RunId } from "@trigger.dev/core/v3/isomorphic";
-import { BatchTaskRunStatus, Prisma, RuntimeEnvironmentType } from "@trigger.dev/database";
-import { TriggerFailedTaskService } from "~/runEngine/services/triggerFailedTask.server";
+import type { BatchTaskRunStatus, Prisma } from "@trigger.dev/database";
 import { $replica, prisma } from "~/db.server";
 import { env } from "~/env.server";
 import { findEnvironmentById, findEnvironmentFromRun } from "~/models/runtimeEnvironment.server";
-import { AuthenticatedEnvironment } from "~/services/apiAuth.server";
+import { TriggerFailedTaskService } from "~/runEngine/services/triggerFailedTask.server";
+import type { AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
 import { updateMetadataService } from "~/services/metadata/updateMetadataInstance.server";
 import { reportInvocationUsage } from "~/services/platform.v3.server";
+import { publishChangeRecord } from "~/services/realtime/runChangeNotifierInstance.server";
 import { MetadataTooLargeError } from "~/utils/packets";
 import { QueueSizeLimitExceededError } from "~/v3/services/common.server";
 import { TriggerTaskService } from "~/v3/services/triggerTask.server";
@@ -20,39 +21,41 @@ import { createExceptionPropertiesFromError } from "./eventRepository/common.ser
 import { getEventRepositoryForStore, recordRunDebugLog } from "./eventRepository/index.server";
 import { roomFromFriendlyRunId, socketIo } from "./handleSocketIo.server";
 import { engine } from "./runEngine.server";
-import { publishChangeRecord } from "~/services/realtime/runChangeNotifierInstance.server";
+import { runStore } from "./runStore.server";
 import { PerformTaskRunAlertsService } from "./services/alerts/performTaskRunAlerts.server";
-import { TaskRunErrorCodes } from "@trigger.dev/core/v3";
 
 export function registerRunEngineEventBusHandlers() {
   engine.eventBus.on("runSucceeded", async ({ time, run, organization, environment }) => {
     const [taskRunError, taskRun] = await tryCatch(
-      $replica.taskRun.findFirstOrThrow({
-        where: {
+      runStore.findRunOrThrow(
+        {
           id: run.id,
         },
-        select: {
-          id: true,
-          friendlyId: true,
-          traceId: true,
-          spanId: true,
-          parentSpanId: true,
-          createdAt: true,
-          completedAt: true,
-          taskIdentifier: true,
-          projectId: true,
-          runtimeEnvironmentId: true,
-          environmentType: true,
-          isTest: true,
-          organizationId: true,
-          taskEventStore: true,
-          // Piggyback the realtime run-changed publish on this existing read so the
-          // per-env channel carries the membership keys (no separate query). No-op when
-          // the native backend is disabled.
-          runTags: true,
-          batchId: true,
+        {
+          select: {
+            id: true,
+            friendlyId: true,
+            traceId: true,
+            spanId: true,
+            parentSpanId: true,
+            createdAt: true,
+            completedAt: true,
+            taskIdentifier: true,
+            projectId: true,
+            runtimeEnvironmentId: true,
+            environmentType: true,
+            isTest: true,
+            organizationId: true,
+            taskEventStore: true,
+            // Piggyback the realtime run-changed publish on this existing read so the
+            // per-env channel carries the membership keys (no separate query). No-op when
+            // the native backend is disabled.
+            runTags: true,
+            batchId: true,
+          },
         },
-      })
+        $replica
+      )
     );
 
     if (taskRunError) {
@@ -110,31 +113,34 @@ export function registerRunEngineEventBusHandlers() {
     const exception = createExceptionPropertiesFromError(sanitizedError);
 
     const [taskRunError, taskRun] = await tryCatch(
-      $replica.taskRun.findFirstOrThrow({
-        where: {
+      runStore.findRunOrThrow(
+        {
           id: run.id,
         },
-        select: {
-          id: true,
-          friendlyId: true,
-          traceId: true,
-          spanId: true,
-          parentSpanId: true,
-          createdAt: true,
-          completedAt: true,
-          taskIdentifier: true,
-          projectId: true,
-          runtimeEnvironmentId: true,
-          environmentType: true,
-          isTest: true,
-          organizationId: true,
-          taskEventStore: true,
-          // Piggyback the realtime run-changed publish on this existing read (no-op when
-          // the native backend is disabled).
-          runTags: true,
-          batchId: true,
+        {
+          select: {
+            id: true,
+            friendlyId: true,
+            traceId: true,
+            spanId: true,
+            parentSpanId: true,
+            createdAt: true,
+            completedAt: true,
+            taskIdentifier: true,
+            projectId: true,
+            runtimeEnvironmentId: true,
+            environmentType: true,
+            isTest: true,
+            organizationId: true,
+            taskEventStore: true,
+            // Piggyback the realtime run-changed publish on this existing read (no-op when
+            // the native backend is disabled).
+            runTags: true,
+            batchId: true,
+          },
         },
-      })
+        $replica
+      )
     );
 
     if (taskRunError) {
@@ -179,31 +185,34 @@ export function registerRunEngineEventBusHandlers() {
     const exception = createExceptionPropertiesFromError(sanitizedError);
 
     const [taskRunError, taskRun] = await tryCatch(
-      $replica.taskRun.findFirstOrThrow({
-        where: {
+      runStore.findRunOrThrow(
+        {
           id: run.id,
         },
-        select: {
-          id: true,
-          friendlyId: true,
-          traceId: true,
-          spanId: true,
-          parentSpanId: true,
-          createdAt: true,
-          completedAt: true,
-          taskIdentifier: true,
-          projectId: true,
-          runtimeEnvironmentId: true,
-          environmentType: true,
-          isTest: true,
-          organizationId: true,
-          taskEventStore: true,
-          // Piggyback the realtime run-changed publish on this existing read (no-op when
-          // the native backend is disabled).
-          runTags: true,
-          batchId: true,
+        {
+          select: {
+            id: true,
+            friendlyId: true,
+            traceId: true,
+            spanId: true,
+            parentSpanId: true,
+            createdAt: true,
+            completedAt: true,
+            taskIdentifier: true,
+            projectId: true,
+            runtimeEnvironmentId: true,
+            environmentType: true,
+            isTest: true,
+            organizationId: true,
+            taskEventStore: true,
+            // Piggyback the realtime run-changed publish on this existing read (no-op when
+            // the native backend is disabled).
+            runTags: true,
+            batchId: true,
+          },
         },
-      })
+        $replica
+      )
     );
 
     if (taskRunError) {
@@ -265,26 +274,29 @@ export function registerRunEngineEventBusHandlers() {
       }
 
       const [cachedRunError, cachedRun] = await tryCatch(
-        $replica.taskRun.findFirstOrThrow({
-          where: {
+        runStore.findRunOrThrow(
+          {
             id: cachedRunId,
           },
-          select: {
-            id: true,
-            friendlyId: true,
-            traceId: true,
-            spanId: true,
-            parentSpanId: true,
-            createdAt: true,
-            completedAt: true,
-            taskIdentifier: true,
-            projectId: true,
-            runtimeEnvironmentId: true,
-            environmentType: true,
-            isTest: true,
-            organizationId: true,
+          {
+            select: {
+              id: true,
+              friendlyId: true,
+              traceId: true,
+              spanId: true,
+              parentSpanId: true,
+              createdAt: true,
+              completedAt: true,
+              taskIdentifier: true,
+              projectId: true,
+              runtimeEnvironmentId: true,
+              environmentType: true,
+              isTest: true,
+              organizationId: true,
+            },
           },
-        })
+          $replica
+        )
       );
 
       if (cachedRunError) {
@@ -296,27 +308,30 @@ export function registerRunEngineEventBusHandlers() {
       }
 
       const [blockedRunError, blockedRun] = await tryCatch(
-        $replica.taskRun.findFirst({
-          where: {
+        runStore.findRun(
+          {
             id: blockedRunId,
           },
-          select: {
-            id: true,
-            friendlyId: true,
-            traceId: true,
-            spanId: true,
-            parentSpanId: true,
-            createdAt: true,
-            completedAt: true,
-            taskIdentifier: true,
-            projectId: true,
-            runtimeEnvironmentId: true,
-            environmentType: true,
-            isTest: true,
-            organizationId: true,
-            taskEventStore: true,
+          {
+            select: {
+              id: true,
+              friendlyId: true,
+              traceId: true,
+              spanId: true,
+              parentSpanId: true,
+              createdAt: true,
+              completedAt: true,
+              taskIdentifier: true,
+              projectId: true,
+              runtimeEnvironmentId: true,
+              environmentType: true,
+              isTest: true,
+              organizationId: true,
+              taskEventStore: true,
+            },
           },
-        })
+          $replica
+        )
       );
 
       if (blockedRunError) {
@@ -372,31 +387,34 @@ export function registerRunEngineEventBusHandlers() {
     }
 
     const [taskRunError, taskRun] = await tryCatch(
-      $replica.taskRun.findFirstOrThrow({
-        where: {
+      runStore.findRunOrThrow(
+        {
           id: run.id,
         },
-        select: {
-          id: true,
-          friendlyId: true,
-          traceId: true,
-          spanId: true,
-          parentSpanId: true,
-          createdAt: true,
-          completedAt: true,
-          taskIdentifier: true,
-          projectId: true,
-          runtimeEnvironmentId: true,
-          environmentType: true,
-          isTest: true,
-          organizationId: true,
-          taskEventStore: true,
-          // Piggyback the realtime run-changed publish on this existing read (no-op when
-          // the native backend is disabled).
-          runTags: true,
-          batchId: true,
+        {
+          select: {
+            id: true,
+            friendlyId: true,
+            traceId: true,
+            spanId: true,
+            parentSpanId: true,
+            createdAt: true,
+            completedAt: true,
+            taskIdentifier: true,
+            projectId: true,
+            runtimeEnvironmentId: true,
+            environmentType: true,
+            isTest: true,
+            organizationId: true,
+            taskEventStore: true,
+            // Piggyback the realtime run-changed publish on this existing read (no-op when
+            // the native backend is disabled).
+            runTags: true,
+            batchId: true,
+          },
         },
-      })
+        $replica
+      )
     );
 
     if (taskRunError) {
@@ -438,31 +456,34 @@ export function registerRunEngineEventBusHandlers() {
 
   engine.eventBus.on("runCancelled", async ({ time, run, organization, environment }) => {
     const [taskRunError, taskRun] = await tryCatch(
-      $replica.taskRun.findFirstOrThrow({
-        where: {
+      runStore.findRunOrThrow(
+        {
           id: run.id,
         },
-        select: {
-          id: true,
-          friendlyId: true,
-          traceId: true,
-          spanId: true,
-          parentSpanId: true,
-          createdAt: true,
-          completedAt: true,
-          taskIdentifier: true,
-          projectId: true,
-          runtimeEnvironmentId: true,
-          environmentType: true,
-          isTest: true,
-          organizationId: true,
-          taskEventStore: true,
-          // Piggyback the realtime run-changed publish on this existing read (no-op when
-          // the native backend is disabled).
-          runTags: true,
-          batchId: true,
+        {
+          select: {
+            id: true,
+            friendlyId: true,
+            traceId: true,
+            spanId: true,
+            parentSpanId: true,
+            createdAt: true,
+            completedAt: true,
+            taskIdentifier: true,
+            projectId: true,
+            runtimeEnvironmentId: true,
+            environmentType: true,
+            isTest: true,
+            organizationId: true,
+            taskEventStore: true,
+            // Piggyback the realtime run-changed publish on this existing read (no-op when
+            // the native backend is disabled).
+            runTags: true,
+            batchId: true,
+          },
         },
-      })
+        $replica
+      )
     );
 
     if (taskRunError) {
@@ -874,7 +895,7 @@ export function setupBatchQueueCallbacks() {
                 batchIndex: itemIndex,
                 realtimeStreamsVersion: meta.realtimeStreamsVersion,
                 planType: meta.planType,
-                triggerSource: meta.parentRunId ? "sdk" : meta.triggerSource ?? "api",
+                triggerSource: meta.parentRunId ? "sdk" : (meta.triggerSource ?? "api"),
                 triggerAction: "trigger",
               },
               "V2"

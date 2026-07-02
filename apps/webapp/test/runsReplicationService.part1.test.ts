@@ -1,12 +1,11 @@
 import { ClickHouse } from "@internal/clickhouse";
 import { replicationContainerTest } from "@internal/testcontainers";
 import { setTimeout } from "node:timers/promises";
-import { z } from "zod";
-import { TaskRunStatus } from "~/database-types";
-import { RunsReplicationService } from "~/services/runsReplicationService.server";
-import { createInMemoryTracing, createInMemoryMetrics } from "./utils/tracing";
-import { TestReplicationClickhouseFactory } from "./utils/testReplicationClickhouseFactory";
 import superjson from "superjson";
+import { z } from "zod";
+import { RunsReplicationService } from "~/services/runsReplicationService.server";
+import { TestReplicationClickhouseFactory } from "./utils/testReplicationClickhouseFactory";
+import { createInMemoryTracing } from "./utils/tracing";
 
 vi.setConfig({ testTimeout: 60_000 });
 
@@ -82,6 +81,9 @@ describe("RunsReplicationService (part 1/7)", () => {
           traceId: "1234",
           spanId: "1234",
           queue: "test",
+          workerQueue: "us-east-1-next",
+          region: "us-east-1",
+          planType: "free",
           runtimeEnvironmentId: runtimeEnvironment.id,
           projectId: project.id,
           organizationId: organization.id,
@@ -121,6 +123,10 @@ describe("RunsReplicationService (part 1/7)", () => {
           trigger_source: "api",
           root_trigger_source: "dashboard",
           is_warm_start: 1,
+          // worker_queue stays the raw backing (operators); region is the geo (customers)
+          worker_queue: "us-east-1-next",
+          region: "us-east-1",
+          plan_type: "free",
         })
       );
 
@@ -149,7 +155,7 @@ describe("RunsReplicationService (part 1/7)", () => {
         logLevel: "warn",
       });
 
-      const { tracer, exporter } = createInMemoryTracing();
+      const { tracer, exporter: _exporter } = createInMemoryTracing();
 
       const runsReplicationService = new RunsReplicationService({
         clickhouseFactory: new TestReplicationClickhouseFactory(clickhouse),

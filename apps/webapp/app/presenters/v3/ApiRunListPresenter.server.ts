@@ -1,14 +1,9 @@
-import {
-  type ListRunResponse,
-  type ListRunResponseItem,
-  MachinePresetName,
-  parsePacket,
-  RunStatus,
-} from "@trigger.dev/core/v3";
+import { MachinePresetName, parsePacket, RunStatus } from "@trigger.dev/core/v3";
 import { type Project, type RuntimeEnvironment, type TaskRunStatus } from "@trigger.dev/database";
 import assertNever from "assert-never";
 import { z } from "zod";
-import { API_VERSIONS, RunStatusUnspecifiedApiVersion } from "~/api/versions";
+import type { API_VERSIONS } from "~/api/versions";
+import { RunStatusUnspecifiedApiVersion } from "~/api/versions";
 import { clickhouseFactory } from "~/services/clickhouse/clickhouseFactoryInstance.server";
 import { logger } from "~/services/logger.server";
 import { CoercedDate } from "~/utils/zod";
@@ -83,6 +78,8 @@ export const ApiRunListSearchParams = z.object({
     }),
   "filter[bulkAction]": z.string().optional(),
   "filter[schedule]": z.string().optional(),
+  // An `error_<fingerprint>` id — lists the runs behind an error group.
+  "filter[error]": z.string().optional(),
   "filter[isTest]": z
     .string()
     .optional()
@@ -237,6 +234,10 @@ export class ApiRunListPresenter extends BasePresenter {
         options.scheduleId = searchParams["filter[schedule]"];
       }
 
+      if (searchParams["filter[error]"]) {
+        options.errorId = searchParams["filter[error]"];
+      }
+
       if (searchParams["filter[createdAt][from]"]) {
         options.from = searchParams["filter[createdAt][from]"].getTime();
       }
@@ -269,7 +270,10 @@ export class ApiRunListPresenter extends BasePresenter {
         options.machines = searchParams["filter[machine]"];
       }
 
-      const clickhouse = await clickhouseFactory.getClickhouseForOrganization(organizationId, "standard");
+      const clickhouse = await clickhouseFactory.getClickhouseForOrganization(
+        organizationId,
+        "standard"
+      );
       const presenter = new NextRunListPresenter(this._replica, clickhouse);
 
       logger.debug("Calling RunListPresenter", { options });

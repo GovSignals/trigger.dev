@@ -7,8 +7,11 @@ import { findDisplayableEnvironment } from "~/models/runtimeEnvironment.server";
 import {
   type SessionStatus,
   SessionsRepository,
+  LEGACY_PLAYGROUND_TAG,
 } from "~/services/sessionsRepository/sessionsRepository.server";
 import { ServiceValidationError } from "~/v3/services/baseService.server";
+import { findCurrentWorkerFromEnvironment } from "~/v3/models/workerDeployment.server";
+import { runStore } from "~/v3/runStore.server";
 import { startActiveSpan } from "~/v3/tracer.server";
 
 export type SessionListOptions = {
@@ -41,11 +44,7 @@ export class SessionListPresenter {
     private readonly clickhouse: ClickHouse
   ) {}
 
-  public async call(
-    organizationId: string,
-    environmentId: string,
-    options: SessionListOptions
-  ) {
+  public async call(organizationId: string, environmentId: string, options: SessionListOptions) {
     return startActiveSpan(
       "SessionListPresenter.call",
       (span) => this.#call(organizationId, environmentId, options, span),
@@ -111,6 +110,28 @@ export class SessionListPresenter {
       return date > now ? now : date;
     }
 
+    // Sessions are produced by chat.agent() tasks. The TaskIdentifier
+    // registry has historically misclassified agent slugs as STANDARD (the
+    // toTriggerSource helper didn't know about "agent" until recently), so
+    // read from BackgroundWorkerTask of the current worker instead — same
+    // source AgentListPresenter uses for the Agents page.
+    const possibleTasksAsync = startActiveSpan(
+      "SessionListPresenter.getPossibleTasks",
+      async () => {
+        const currentWorker = await findCurrentWorkerFromEnvironment(
+          { id: environmentId, type: displayableEnvironment.type },
+          this.replica
+        );
+        if (!currentWorker) return [];
+        const agents = await this.replica.backgroundWorkerTask.findMany({
+          where: { workerId: currentWorker.id, triggerSource: "AGENT" },
+          select: { slug: true },
+          orderBy: { slug: "asc" },
+        });
+        return agents.map((a) => ({ slug: a.slug, isInLatestDeployment: true }));
+      }
+    );
+
     const { sessions, pagination } = await sessionsRepository.listSessions({
       organizationId,
       projectId,
@@ -134,13 +155,11 @@ export class SessionListPresenter {
 
     let hasAnySessions = sessions.length > 0;
     if (!hasAnySessions) {
-      const firstSession = await startActiveSpan(
-        "SessionListPresenter.hasAnySessions",
-        () =>
-          this.replica.session.findFirst({
-            where: { runtimeEnvironmentId: environmentId },
-            select: { id: true },
-          })
+      const firstSession = await startActiveSpan("SessionListPresenter.hasAnySessions", () =>
+        this.replica.session.findFirst({
+          where: { runtimeEnvironmentId: environmentId },
+          select: { id: true },
+        })
       );
       if (firstSession) {
         hasAnySessions = true;
@@ -155,6 +174,8 @@ export class SessionListPresenter {
       .map((s) => s.currentRunId)
       .filter((id): id is string => Boolean(id));
 
+    const possibleTasks = await possibleTasksAsync;
+
     const currentRuns = await startActiveSpan(
       "SessionListPresenter.findCurrentRuns",
       async (span) => {
@@ -164,14 +185,17 @@ export class SessionListPresenter {
         // pointer could surface another tenant's run. The list query above
         // is already env-scoped; the run lookup needs the same fence.
         return currentRunIds.length > 0
-          ? this.replica.taskRun.findMany({
-              where: {
-                id: { in: currentRunIds },
-                projectId,
-                runtimeEnvironmentId: environmentId,
+          ? runStore.findRuns(
+              {
+                where: {
+                  id: { in: currentRunIds },
+                  projectId,
+                  runtimeEnvironmentId: environmentId,
+                },
+                select: { id: true, friendlyId: true },
               },
-              select: { id: true, friendlyId: true },
-            })
+              this.replica
+            )
           : [];
       }
     );
@@ -196,7 +220,13 @@ export class SessionListPresenter {
           externalId: session.externalId,
           type: session.type,
           taskIdentifier: session.taskIdentifier,
-          tags: session.tags ? [...session.tags].sort((a, b) => a.localeCompare(b)) : [],
+          isTest: session.isTest,
+          // Hide the legacy "playground" tag (pre-isTest sessions) from display.
+          tags: session.tags
+            ? [...session.tags]
+                .filter((t) => t !== LEGACY_PLAYGROUND_TAG)
+                .sort((a, b) => a.localeCompare(b))
+            : [],
           status,
           closedAt: session.closedAt ? session.closedAt.toISOString() : undefined,
           closedReason: session.closedReason ?? undefined,
@@ -220,6 +250,7 @@ export class SessionListPresenter {
         from: time.from,
         to: time.to,
       },
+      possibleTasks,
       hasFilters,
       hasAnySessions,
     };

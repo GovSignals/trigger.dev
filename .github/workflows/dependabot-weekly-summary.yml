@@ -2,7 +2,7 @@ name: Dependabot Weekly Summary
 
 on:
   schedule:
-    - cron: "0 8 * * 1"  # Mon 08:00 UTC
+    - cron: "0 8 * * 1" # Mon 08:00 UTC
   workflow_dispatch:
 
 # Single-purpose monitoring workflow; serialise on workflow name only - we never
@@ -12,14 +12,18 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read       # gh CLI baseline
-  pull-requests: read  # gh pr list (open dependabot PRs)
-  actions: read        # gh run list / view (parse latest dependabot run logs)
+  contents: read # gh CLI baseline
+  pull-requests: read # gh pr list (open dependabot PRs)
+  actions: read # gh run list / view (parse latest dependabot run logs)
 
 jobs:
   summary:
     name: Post weekly Dependabot summary
-    runs-on: ubuntu-latest
+    # Set the ENABLE_DEPENDABOT_ALERTS repository variable to 'false' to turn off
+    # the Dependabot alert/summary notifiers — e.g. forks/mirrors that lack the
+    # DEPENDABOT_ALERTS_TOKEN / SLACK_BOT_TOKEN secrets. Defaults to enabled.
+    if: ${{ vars.ENABLE_DEPENDABOT_ALERTS != 'false' }}
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     environment: dependabot-summary
     env:
       # Severities surface in the actions list when their remaining TTR drops

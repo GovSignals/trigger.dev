@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { Metadata } from "./overrides.js";
+import type { Metadata } from "./overrides.js";
 import { z } from "zod";
-import { EnvObject } from "std-env";
+import type { EnvObject } from "std-env";
 
 const DateEnv = z
   .string()
   .transform((val) => new Date(parseInt(val, 10)))
   .pipe(z.date());
+
+const BoolEnv = z.preprocess((val) => {
+  if (typeof val !== "string") {
+    return val;
+  }
+  return ["true", "1"].includes(val.toLowerCase().trim());
+}, z.boolean());
 
 // All IDs are friendly IDs
 const Env = z.object({
@@ -47,6 +54,9 @@ const Env = z.object({
   TRIGGER_SNAPSHOT_POLL_INTERVAL_SECONDS: z.coerce.number().default(5),
   TRIGGER_SUCCESS_EXIT_CODE: z.coerce.number().default(0),
   TRIGGER_FAILURE_EXIT_CODE: z.coerce.number().default(1),
+
+  // Gates the per-log-line debug-log POST to the supervisor; off by default
+  TRIGGER_SEND_RUN_DEBUG_LOGS: BoolEnv.default(false),
 });
 
 type Env = z.infer<typeof Env>;
@@ -135,6 +145,9 @@ export class RunnerEnv {
   }
   get TRIGGER_FAILURE_EXIT_CODE() {
     return this.env.TRIGGER_FAILURE_EXIT_CODE;
+  }
+  get TRIGGER_SEND_RUN_DEBUG_LOGS() {
+    return this.env.TRIGGER_SEND_RUN_DEBUG_LOGS;
   }
   get TRIGGER_HEARTBEAT_INTERVAL_SECONDS() {
     return this.env.TRIGGER_HEARTBEAT_INTERVAL_SECONDS;

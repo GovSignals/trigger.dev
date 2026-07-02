@@ -1,10 +1,10 @@
-import { ClickHouse } from "@internal/clickhouse";
+import type { ClickHouse } from "@internal/clickhouse";
 import { ScheduledTaskPayload, parsePacket, prettyPrintPacket } from "@trigger.dev/core/v3";
 import {
+  type PrismaClientOrTransaction,
   type RuntimeEnvironmentType,
   type TaskRunStatus,
   type TaskRunTemplate,
-  PrismaClientOrTransaction,
 } from "@trigger.dev/database";
 import { inferSchema } from "@jsonhero/schema-infer";
 import parse from "parse-duration";
@@ -12,6 +12,7 @@ import { type PrismaClient } from "~/db.server";
 import { RunsRepository } from "~/services/runsRepository/runsRepository.server";
 import { getTimezones } from "~/utils/timezones.server";
 import { findCurrentWorkerDeployment } from "~/v3/models/workerDeployment.server";
+import { runStore } from "~/v3/runStore.server";
 import { queueTypeFromType } from "./QueueRetrievePresenter.server";
 
 export type RunTemplate = TaskRunTemplate & {
@@ -214,38 +215,41 @@ export class TestTaskPresenter {
       },
     });
 
-    const latestRuns = await this.replica.taskRun.findMany({
-      select: {
-        id: true,
-        queue: true,
-        friendlyId: true,
-        taskIdentifier: true,
-        createdAt: true,
-        status: true,
-        payload: true,
-        payloadType: true,
-        seedMetadata: true,
-        seedMetadataType: true,
-        runtimeEnvironmentId: true,
-        concurrencyKey: true,
-        maxAttempts: true,
-        maxDurationInSeconds: true,
-        machinePreset: true,
-        ttl: true,
-        runTags: true,
-      },
-      where: {
-        id: {
-          in: runIds,
+    const latestRuns = await runStore.findRuns(
+      {
+        where: {
+          id: {
+            in: runIds,
+          },
+          payloadType: {
+            in: ["application/json", "application/super+json"],
+          },
         },
-        payloadType: {
-          in: ["application/json", "application/super+json"],
+        select: {
+          id: true,
+          queue: true,
+          friendlyId: true,
+          taskIdentifier: true,
+          createdAt: true,
+          status: true,
+          payload: true,
+          payloadType: true,
+          seedMetadata: true,
+          seedMetadataType: true,
+          runtimeEnvironmentId: true,
+          concurrencyKey: true,
+          maxAttempts: true,
+          maxDurationInSeconds: true,
+          machinePreset: true,
+          ttl: true,
+          runTags: true,
+        },
+        orderBy: {
+          createdAt: "desc",
         },
       },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
+      this.replica
+    );
 
     // Infer schema from existing run payloads when no explicit schema is defined
     let inferredPayloadSchema: unknown | undefined;
@@ -302,8 +306,8 @@ export class TestTaskPresenter {
                   metadata: r.seedMetadata
                     ? await prettyPrintPacket(r.seedMetadata, r.seedMetadataType)
                     : undefined,
-                  ttlSeconds: r.ttl ? parse(r.ttl, "s") ?? undefined : undefined,
-                } satisfies StandardRun)
+                  ttlSeconds: r.ttl ? (parse(r.ttl, "s") ?? undefined) : undefined,
+                }) satisfies StandardRun
             )
           ),
           latestVersions,
@@ -347,7 +351,7 @@ export class TestTaskPresenter {
                     maxDurationInSeconds: r.maxDurationInSeconds ?? undefined,
                     machinePreset: r.machinePreset ?? undefined,
                     payload: payload.data,
-                    ttlSeconds: r.ttl ? parse(r.ttl, "s") ?? undefined : undefined,
+                    ttlSeconds: r.ttl ? (parse(r.ttl, "s") ?? undefined) : undefined,
                   } satisfies ScheduledRun;
                 }
               })

@@ -1,16 +1,10 @@
-import { Keyboard } from "lucide-react";
+import { KeyboardIcon } from "~/assets/icons/KeyboardIcon";
 import { useState } from "react";
 import { useShortcutKeys } from "~/hooks/useShortcutKeys";
 import { Button } from "./primitives/Buttons";
 import { Header3 } from "./primitives/Headers";
 import { Paragraph } from "./primitives/Paragraph";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger
-} from "./primitives/SheetV3";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "./primitives/SheetV3";
 import { ShortcutKey } from "./primitives/ShortcutKey";
 
 export function Shortcuts() {
@@ -19,8 +13,8 @@ export function Shortcuts() {
       <SheetTrigger asChild>
         <Button
           variant="small-menu-item"
-          LeadingIcon={Keyboard}
-          leadingIconClassName="text-blue-500"
+          LeadingIcon={KeyboardIcon}
+          leadingIconClassName="text-text-dimmed group-hover/button:text-text-bright"
           data-action="shortcuts"
           fullWidth
           textAlignLeft
@@ -59,7 +53,7 @@ function ShortcutContent() {
       <SheetHeader>
         <SheetTitle>
           <div className="flex items-center gap-x-2">
-            <Keyboard className="size-5 text-indigo-500" />
+            <KeyboardIcon className="size-5 text-text-bright" />
             <span className="font-sans text-base font-medium text-text-bright">
               Keyboard shortcuts
             </span>
@@ -83,7 +77,7 @@ function ShortcutContent() {
               <ShortcutKey shortcut={{ key: "f" }} variant="medium/bright" />
             </Shortcut>
             <Shortcut name="Toggle side menu">
-              <ShortcutKey shortcut={{ modifiers: ["mod"]}} variant="medium/bright" />
+              <ShortcutKey shortcut={{ modifiers: ["mod"] }} variant="medium/bright" />
               <ShortcutKey shortcut={{ key: "b" }} variant="medium/bright" />
             </Shortcut>
             <Shortcut name="Select filter">

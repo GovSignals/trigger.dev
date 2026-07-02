@@ -1,7 +1,7 @@
 import { logger } from "../utilities/logger.js";
 import { depot } from "@depot/cli";
 import { x } from "tinyexec";
-import { BuildManifest, BuildRuntime } from "@trigger.dev/core/v3/schemas";
+import type { BuildManifest, BuildRuntime } from "@trigger.dev/core/v3/schemas";
 import { networkInterfaces } from "os";
 import { join, resolve } from "path";
 import { safeReadJSONFile } from "../utilities/fileSystem.js";
@@ -1015,7 +1015,7 @@ function normalizeApiUrlForBuild(apiUrl: string): string {
 function getHostIP() {
   const interfaces = networkInterfaces();
 
-  for (const [name, iface] of Object.entries(interfaces)) {
+  for (const [_name, iface] of Object.entries(interfaces)) {
     if (!iface) {
       continue;
     }
@@ -1086,7 +1086,7 @@ function isQemuRegistered() {
     // Check a single QEMU handler
     const binfmt = readFileSync("/proc/sys/fs/binfmt_misc/qemu-aarch64", "utf8");
     return binfmt.includes("enabled");
-  } catch (e) {
+  } catch (_e) {
     return false;
   }
 }

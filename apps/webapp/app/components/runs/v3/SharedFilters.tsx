@@ -17,7 +17,6 @@ import { Callout } from "~/components/primitives/Callout";
 import { DateTime } from "~/components/primitives/DateTime";
 import { DateTimePicker } from "~/components/primitives/DateTimePicker";
 import { FormError } from "~/components/primitives/FormError";
-import { Header3 } from "~/components/primitives/Headers";
 import { Input } from "~/components/primitives/Input";
 import { Label } from "~/components/primitives/Label";
 import { Paragraph } from "~/components/primitives/Paragraph";
@@ -329,8 +328,8 @@ export function timeFilterRenderValues({
     rangeType === "range" || rangeType === "period"
       ? labelName
       : rangeType === "from"
-      ? `${labelName} after`
-      : `${labelName} before`;
+        ? `${labelName} after`
+        : `${labelName} before`;
 
   return { label, valueLabel, rangeType };
 }
@@ -375,9 +374,13 @@ export function TimeFilter({
   valueClassName,
 }: TimeFilterProps = {}) {
   const { value } = useSearchParams();
-  const periodValue = period ?? value("period");
-  const fromValue = from ?? value("from");
-  const toValue = to ?? value("to");
+  // In controlled mode (onValueChange provided) the caller owns all three values via local
+  // state, so don't fall back to the URL — otherwise selecting a custom date range (which
+  // sets period to undefined) would read the page-level URL period and override the range.
+  const controlled = onValueChange !== undefined;
+  const periodValue = controlled ? period : (period ?? value("period"));
+  const fromValue = controlled ? from : (from ?? value("from"));
+  const toValue = controlled ? to : (to ?? value("to"));
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   useShortcutKeys({
@@ -499,7 +502,7 @@ export function TimeDropdown({
   const isInitialCustom =
     period && !timePeriods.some((p) => p.value === period) && initialCustom.value !== "";
   const [selectedPeriod, setSelectedPeriod] = useState<string>(
-    isInitialCustom ? "custom" : period ?? defaultPeriod
+    isInitialCustom ? "custom" : (period ?? defaultPeriod)
   );
 
   // Custom duration state
@@ -513,7 +516,7 @@ export function TimeDropdown({
     setCustomUnit(parsed.unit);
 
     const isCustom = period && !timePeriods.some((p) => p.value === period) && parsed.value !== "";
-    setSelectedPeriod(isCustom ? "custom" : period ?? defaultPeriod);
+    setSelectedPeriod(isCustom ? "custom" : (period ?? defaultPeriod));
     setActiveSection(from || to ? "dateRange" : "duration");
   }, [period, from, to, defaultPeriod]);
 

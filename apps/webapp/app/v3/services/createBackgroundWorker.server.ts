@@ -1,4 +1,4 @@
-import {
+import type {
   BackgroundWorkerMetadata,
   BackgroundWorkerSourceFileMetadata,
   CreateBackgroundWorkerRequestBody,
@@ -6,12 +6,14 @@ import {
   QueueManifest,
   TaskResource,
 } from "@trigger.dev/core/v3";
+import { tryCatch } from "@trigger.dev/core/v3";
 import { BackgroundWorkerId, stringifyDuration } from "@trigger.dev/core/v3/isomorphic";
 import type { BackgroundWorker, TaskQueue, TaskQueueType } from "@trigger.dev/database";
 import cronstrue from "cronstrue";
-import { $transaction, Prisma, PrismaClientOrTransaction } from "~/db.server";
+import type { PrismaClientOrTransaction } from "~/db.server";
+import { $transaction, Prisma } from "~/db.server";
 import { sanitizeQueueName } from "~/models/taskQueue.server";
-import { AuthenticatedEnvironment } from "~/services/apiAuth.server";
+import type { AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
 import { syncTaskIdentifiers } from "~/services/taskIdentifierRegistry.server";
 import {
@@ -20,22 +22,21 @@ import {
 } from "~/services/taskMetadataCache.server";
 import { taskMetadataCacheInstance } from "~/services/taskMetadataCacheInstance.server";
 import { generateFriendlyId } from "../friendlyIdentifiers";
+import { engine } from "../runEngine.server";
 import {
   removeQueueConcurrencyLimits,
   updateEnvConcurrencyLimits,
   updateQueueConcurrencyLimits,
 } from "../runQueue.server";
+import { scheduleEngine } from "../scheduleEngine.server";
 import { calculateNextBuildVersion } from "../utils/calculateNextBuildVersion";
 import { clampMaxDuration } from "../utils/maxDuration";
 import { BaseService, ServiceValidationError } from "./baseService.server";
 import { CheckScheduleService } from "./checkSchedule.server";
 import { projectPubSub } from "./projectPubSub.server";
-import { tryCatch } from "@trigger.dev/core/v3";
-import { engine } from "../runEngine.server";
-import { scheduleEngine } from "../scheduleEngine.server";
 
-import { stripBackgroundWorkerMetadataForStorage } from "./stripBackgroundWorkerMetadataForStorage.server";
 import { assertNoDuplicateTaskIds } from "./duplicateTaskIds.server";
+import { stripBackgroundWorkerMetadataForStorage } from "./stripBackgroundWorkerMetadataForStorage.server";
 export { stripBackgroundWorkerMetadataForStorage };
 
 export class CreateBackgroundWorkerService extends BaseService {
@@ -381,7 +382,7 @@ async function createWorkerTask(
           : ("STANDARD" as const);
 
     resolvedTtl =
-      typeof task.ttl === "number" ? stringifyDuration(task.ttl) ?? null : task.ttl ?? null;
+      typeof task.ttl === "number" ? (stringifyDuration(task.ttl) ?? null) : (task.ttl ?? null);
 
     await prisma.backgroundWorkerTask.create({
       data: {
@@ -894,9 +895,18 @@ async function createWorkerPrompts(
         },
       });
 
-      // Compute content hash for dedup
+      // Compute the version-definition hash for dedup. Includes the model and
+      // config, not just the prompt text, so changing a code prompt's model or
+      // config creates a new version — otherwise a model-only change is silently
+      // skipped and the old model keeps serving.
       const contentString = promptResource.content ?? "";
-      const contentHash = hashContent(contentString);
+      const contentHash = hashContent(
+        JSON.stringify({
+          content: contentString,
+          model: promptResource.model ?? null,
+          config: promptResource.config ?? null,
+        })
+      );
 
       // Find the latest version overall (for version numbering) and the latest
       // code-sourced version (for content dedup). We compare against the latest
@@ -914,7 +924,8 @@ async function createWorkerPrompts(
       });
 
       if (latestCodeVersion?.contentHash === contentHash) {
-        // Code content unchanged since last deploy — skip creating a new version
+        // Code definition (text + model + config) unchanged since last deploy —
+        // skip creating a new version.
         continue;
       }
 

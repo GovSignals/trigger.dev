@@ -1,7 +1,7 @@
 import { startSpan } from "@internal/tracing";
 import { isFinalRunStatus } from "../statuses.js";
-import { SystemResources } from "./systems.js";
-import { WaitpointSystem } from "./waitpointSystem.js";
+import type { SystemResources } from "./systems.js";
+import type { WaitpointSystem } from "./waitpointSystem.js";
 
 export type BatchSystemOptions = {
   resources: SystemResources;
@@ -87,16 +87,19 @@ export class BatchSystem {
         return;
       }
 
-      const runs = await this.$.prisma.taskRun.findMany({
-        select: {
-          id: true,
-          status: true,
+      const runs = await this.$.runStore.findRuns(
+        {
+          select: {
+            id: true,
+            status: true,
+          },
+          where: {
+            batchId,
+            runtimeEnvironmentId: batch.runtimeEnvironmentId,
+          },
         },
-        where: {
-          batchId,
-          runtimeEnvironmentId: batch.runtimeEnvironmentId,
-        },
-      });
+        this.$.prisma
+      );
 
       if (runs.every((r) => isFinalRunStatus(r.status))) {
         this.$.logger.debug("#tryCompleteBatch: All runs are completed", { batchId });

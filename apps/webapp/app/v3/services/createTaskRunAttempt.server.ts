@@ -1,9 +1,11 @@
-import { parsePacket, V3TaskRunExecution } from "@trigger.dev/core/v3";
-import { TaskRun, TaskRunAttempt } from "@trigger.dev/database";
+import type { V3TaskRunExecution } from "@trigger.dev/core/v3";
+import { parsePacket } from "@trigger.dev/core/v3";
+import type { TaskRun, TaskRunAttempt } from "@trigger.dev/database";
 import { MAX_TASK_RUN_ATTEMPTS } from "~/consts";
-import { $transaction, prisma, PrismaClientOrTransaction } from "~/db.server";
+import type { PrismaClientOrTransaction } from "~/db.server";
+import { $transaction, prisma } from "~/db.server";
 import { findQueueInEnvironment } from "~/models/taskQueue.server";
-import { AuthenticatedEnvironment } from "~/services/apiAuth.server";
+import type { AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
 import { reportInvocationUsage } from "~/services/platform.v3.server";
 import { generateFriendlyId } from "../friendlyIdentifiers";
@@ -12,6 +14,7 @@ import { FINAL_RUN_STATUSES } from "../taskStatus";
 import { BaseService, ServiceValidationError } from "./baseService.server";
 import { CrashTaskRunService } from "./crashTaskRun.server";
 import { ExpireEnqueuedRunService } from "./expireEnqueuedRun.server";
+import { runStore } from "../runStore.server";
 
 export class CreateTaskRunAttemptService extends BaseService {
   public async call({
@@ -45,43 +48,46 @@ export class CreateTaskRunAttemptService extends BaseService {
         span.setAttribute("taskRunId", runId);
       }
 
-      const taskRun = await this._prisma.taskRun.findFirst({
-        where: {
+      const taskRun = await this.runStore.findRun(
+        {
           id: !isFriendlyId ? runId : undefined,
           friendlyId: isFriendlyId ? runId : undefined,
           runtimeEnvironmentId: environment.id,
         },
-        include: {
-          attempts: {
-            take: 1,
-            orderBy: {
-              number: "desc",
+        {
+          include: {
+            attempts: {
+              take: 1,
+              orderBy: {
+                number: "desc",
+              },
             },
-          },
-          lockedBy: {
-            include: {
-              worker: {
-                select: {
-                  id: true,
-                  version: true,
-                  sdkVersion: true,
-                  cliVersion: true,
-                  supportsLazyAttempts: true,
+            lockedBy: {
+              include: {
+                worker: {
+                  select: {
+                    id: true,
+                    version: true,
+                    sdkVersion: true,
+                    cliVersion: true,
+                    supportsLazyAttempts: true,
+                  },
                 },
               },
             },
-          },
-          batchItems: {
-            include: {
-              batchTaskRun: {
-                select: {
-                  friendlyId: true,
+            batchItems: {
+              include: {
+                batchTaskRun: {
+                  select: {
+                    friendlyId: true,
+                  },
                 },
               },
             },
           },
         },
-      });
+        this._prisma
+      );
 
       logger.debug("Creating a task run attempt", { taskRun });
 
@@ -122,8 +128,8 @@ export class CreateTaskRunAttemptService extends BaseService {
       const nextAttemptNumber = taskRun.attempts[0]
         ? taskRun.attempts[0].number + 1
         : startAtZero
-        ? 0
-        : 1;
+          ? 0
+          : 1;
 
       if (nextAttemptNumber > MAX_TASK_RUN_ATTEMPTS) {
         const service = new CrashTaskRunService(this._prisma);
@@ -263,20 +269,23 @@ async function getAuthenticatedEnvironmentFromRun(
 ) {
   const isFriendlyId = friendlyId.startsWith("run_");
 
-  const taskRun = await (prismaClient ?? prisma).taskRun.findFirst({
-    where: {
+  const taskRun = await runStore.findRun(
+    {
       id: !isFriendlyId ? friendlyId : undefined,
       friendlyId: isFriendlyId ? friendlyId : undefined,
     },
-    include: {
-      runtimeEnvironment: {
-        include: {
-          organization: true,
-          project: true,
+    {
+      include: {
+        runtimeEnvironment: {
+          include: {
+            organization: true,
+            project: true,
+          },
         },
       },
     },
-  });
+    prismaClient ?? prisma
+  );
 
   if (!taskRun) {
     return;

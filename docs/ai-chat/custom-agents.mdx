@@ -4,10 +4,6 @@ sidebarTitle: "Custom agents"
 description: "Build chat agents without chat.agent()'s managed lifecycle: register with chat.customAgent(), then drive turns with the createSession iterator or a hand-rolled loop."
 ---
 
-import RcBanner from "/snippets/ai-chat-rc-banner.mdx";
-
-<RcBanner />
-
 **A custom agent is a task you register with `chat.customAgent()` and drive yourself — either with the managed turn iterator from `chat.createSession()`, or with a fully hand-rolled loop over the raw chat primitives.** You give up `chat.agent()`'s lifecycle hooks and automatic continuation recovery; you gain inline control over every turn, and (at the lowest level) full control over the stream conversion.
 
 See the [comparison table](/ai-chat/backend) before dropping down. The frontend is unchanged either way: all levels speak the same wire protocol, so [`useTriggerChatTransport`](/ai-chat/frontend) points at a custom agent exactly like a `chat.agent()`.
@@ -114,10 +110,11 @@ Each turn yielded by the iterator provides:
 | `continuation`      | `boolean`                         | Whether this is a continuation run                       |
 | `previousTurnUsage` | `LanguageModelUsage \| undefined` | Token usage from the previous turn (undefined on turn 0) |
 | `totalUsage`        | `LanguageModelUsage`              | Cumulative token usage across all completed turns        |
+| `handover`          | `{ isFinal: boolean } \| null`    | The [`chat.headStart`](/ai-chat/fast-starts#handover-with-custom-agents) handover for this turn (turn 0 only); `null` otherwise |
 
 | Method                        | Description                                                                                                |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `turn.complete(source)`       | Pipe stream, capture response, accumulate, and signal turn-complete                                        |
+| `turn.complete(source?)`      | Pipe stream, capture response, accumulate, and signal turn-complete. Call with no source on a final head-start handover (`turn.handover.isFinal`), where the warm step-1 partial is already the response |
 | `turn.done()`                 | Signal turn-complete only (when you have piped manually)                                                     |
 | `turn.addResponse(response)`  | Add a response to the accumulator manually                                                                 |
 | `turn.setMessages(uiMessages)`| Replace the accumulated messages — continuation seeding and on-demand compaction                           |
@@ -177,6 +174,38 @@ for await (const turn of session) {
   await turn.done();
 }
 ```
+
+## Stopping generation
+
+The frontend stops a turn with [`transport.stopGeneration(chatId)`](/ai-chat/frontend#stop-generation), which writes a stop signal to the session's input stream. It aborts the current turn's generation but keeps the run alive, so the next message continues on the same session.
+
+`turn.signal` is a combined stop-and-cancel `AbortSignal`, fresh each turn. Pass it to `streamText` so the stop reaches the model, then let `turn.complete()` finish the turn:
+
+```ts trigger/my-chat.ts
+for await (const turn of session) {
+  const result = streamText({
+    model: anthropic("claude-sonnet-4-5"),
+    messages: turn.messages,
+    abortSignal: turn.signal, // fires on a user stop OR a run cancel
+    stopWhen: stepCountIs(15),
+  });
+
+  await turn.complete(result);
+
+  if (turn.stopped) {
+    // user stopped this turn — the partial response is already accumulated
+  }
+}
+```
+
+On a stop, `turn.complete()` cleans up the aborted parts of the partial response, accumulates it as its own assistant message, and writes turn-complete. The run does not end — the loop continues to the next turn.
+
+Read `turn.stopped` to tell a user stop from a full run cancel:
+
+- **User stop** (`transport.stopGeneration`): `turn.signal` aborts, `turn.stopped` is `true`, the partial response is accumulated, and the run stays alive for the next message.
+- **Run cancel** (cancelled, expired, or `maxDuration` exceeded): `turn.signal` aborts, `turn.stopped` is `false`, and `turn.complete()` returns without accumulating because the run is ending.
+
+A hand-rolled loop wires this itself with `chat.createStopSignal()` and `chat.cleanupAbortedParts()`. Two things `createSession` handles for you are easy to get wrong there — see the [hand-rolled loop checklist](#hand-rolled-loop-checklist).
 
 ## Hand-rolled loop with primitives
 

@@ -13,7 +13,7 @@ This repository is a pnpm monorepo managed with Turbo. It contains multiple apps
 See `ai/references/repo.md` for a more complete explanation of the workspaces.
 
 ## Development setup
-1. Install dependencies with `pnpm i` (pnpm `10.33.2` and Node.js `20.20.2` are required).
+1. Install dependencies with `pnpm i` (pnpm `10.33.2` and Node.js `22.23.1` are required).
 2. Copy `.env.example` to `.env` and generate a random 16 byte hex string for `ENCRYPTION_KEY` (`openssl rand -hex 16`). Update other secrets if needed.
 3. Start the local services with Docker:
    ```bash
@@ -55,7 +55,7 @@ For full setup instructions see `CONTRIBUTING.md`.
 Refer to `ai/references/tests.md` for details on writing tests. Tests should avoid mocks or stubs and use the helpers from `@internal/testcontainers` when Redis or Postgres are needed.
 
 ## Coding style
-- Formatting is enforced using Prettier. Run `pnpm run format` before committing.
+- Formatting is enforced using oxfmt. Run `pnpm run format` before committing.
 - Follow the existing project conventions. Test files live beside the files under test and use descriptive `describe` and `it` blocks.
 - Do not commit directly to the `main` branch. All changes should be made in a separate branch and go through a pull request.
 

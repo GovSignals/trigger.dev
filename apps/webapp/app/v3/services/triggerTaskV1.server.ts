@@ -1,9 +1,8 @@
+import type { IOPacket, TriggerTaskRequestBody } from "@trigger.dev/core/v3";
 import {
-  IOPacket,
   packetRequiresOffloading,
   taskRunErrorEnhancer,
   taskRunErrorToString,
-  TriggerTaskRequestBody,
 } from "@trigger.dev/core/v3";
 import {
   parseNaturalLanguageDuration,
@@ -14,7 +13,7 @@ import { Prisma } from "@trigger.dev/database";
 import { z } from "zod";
 import { env } from "~/env.server";
 import { MAX_TAGS_PER_RUN } from "~/models/taskRunTag.server";
-import { AuthenticatedEnvironment } from "~/services/apiAuth.server";
+import type { AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import { autoIncrementCounter } from "~/services/autoIncrementCounter.server";
 import { logger } from "~/services/logger.server";
 import { getEntitlement } from "~/services/platform.v3.server";
@@ -35,12 +34,8 @@ import { BaseService, ServiceValidationError } from "./baseService.server";
 import { EnqueueDelayedRunService } from "./enqueueDelayedRun.server";
 import { enqueueRun } from "./enqueueRun.server";
 import { ExpireEnqueuedRunService } from "./expireEnqueuedRun.server";
-import {
-  MAX_ATTEMPTS,
-  OutOfEntitlementError,
-  TriggerTaskServiceOptions,
-  TriggerTaskServiceResult,
-} from "./triggerTask.server";
+import type { TriggerTaskServiceOptions, TriggerTaskServiceResult } from "./triggerTask.server";
+import { MAX_ATTEMPTS, OutOfEntitlementError } from "./triggerTask.server";
 
 // This is here for backwords compatibility for v3 users
 const QueueOptions = z.object({
@@ -78,7 +73,7 @@ export class TriggerTaskServiceV1 extends BaseService {
       const ttl =
         typeof body.options?.ttl === "number"
           ? stringifyDuration(body.options?.ttl)
-          : body.options?.ttl ?? (environment.type === "DEVELOPMENT" ? "10m" : undefined);
+          : (body.options?.ttl ?? (environment.type === "DEVELOPMENT" ? "10m" : undefined));
 
       const existingRun = idempotencyKey
         ? await this._prisma.taskRun.findFirst({
@@ -352,10 +347,10 @@ export class TriggerTaskServiceV1 extends BaseService {
                 const depth = dependentAttempt
                   ? dependentAttempt.taskRun.depth + 1
                   : parentAttempt
-                  ? parentAttempt.taskRun.depth + 1
-                  : dependentBatchRun?.dependentTaskAttempt
-                  ? dependentBatchRun.dependentTaskAttempt.taskRun.depth + 1
-                  : 0;
+                    ? parentAttempt.taskRun.depth + 1
+                    : dependentBatchRun?.dependentTaskAttempt
+                      ? dependentBatchRun.dependentTaskAttempt.taskRun.depth + 1
+                      : 0;
 
                 const queueTimestamp =
                   options.queueTimestamp ??
@@ -727,7 +722,7 @@ export class TriggerTaskServiceV1 extends BaseService {
         return packet;
       }
 
-      const { needsOffloading, size } = packetRequiresOffloading(
+      const { needsOffloading, size: _size } = packetRequiresOffloading(
         packet,
         env.TASK_PAYLOAD_OFFLOAD_THRESHOLD
       );
@@ -738,7 +733,12 @@ export class TriggerTaskServiceV1 extends BaseService {
 
       const filename = `${pathPrefix}/payload.json`;
 
-      const uploadedFilename = await uploadPacketToObjectStore(filename, packet.data, packet.dataType, environment);
+      const uploadedFilename = await uploadPacketToObjectStore(
+        filename,
+        packet.data,
+        packet.dataType,
+        environment
+      );
 
       return {
         data: uploadedFilename,

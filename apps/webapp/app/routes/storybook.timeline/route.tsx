@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Paragraph } from "~/components/primitives/Paragraph";
 import { Switch } from "~/components/primitives/Switch";
 import * as Timeline from "~/components/primitives/Timeline";
-import { SpanProps } from "~/components/primitives/Timeline";
+import type { SpanProps } from "~/components/primitives/Timeline";
 import { cn } from "~/utils/cn";
 
 const maxDuration = 10_000;
@@ -197,8 +197,8 @@ export default function Story() {
                             index === 0
                               ? "left-0.5"
                               : index === tickCount - 1
-                              ? "-right-0 -translate-x-full"
-                              : "left-1/2 -translate-x-1/2"
+                                ? "-right-0 -translate-x-full"
+                                : "left-1/2 -translate-x-1/2"
                           }
                         >
                           {formatDurationMilliseconds(ms, {

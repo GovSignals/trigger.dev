@@ -1,5 +1,5 @@
-import { RescheduleRunRequestBody } from "@trigger.dev/core/v3";
-import { TaskRun } from "@trigger.dev/database";
+import type { RescheduleRunRequestBody } from "@trigger.dev/core/v3";
+import type { TaskRun } from "@trigger.dev/database";
 import { parseDelay } from "~/utils/delays";
 import { BaseService, ServiceValidationError } from "./baseService.server";
 import { EnqueueDelayedRunService } from "./enqueueDelayedRun.server";
@@ -17,15 +17,14 @@ export class RescheduleTaskRunService extends BaseService {
       throw new ServiceValidationError(`Invalid delay: ${body.delay}`);
     }
 
-    const updatedRun = await this._prisma.taskRun.update({
-      where: {
-        id: taskRun.id,
-      },
-      data: {
+    const updatedRun = await this.runStore.rescheduleRun(
+      taskRun.id,
+      {
         delayUntil: delay,
         queueTimestamp: delay,
       },
-    });
+      this._prisma
+    );
 
     if (updatedRun.engine === "V1") {
       await EnqueueDelayedRunService.reschedule(taskRun.id, delay);

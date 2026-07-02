@@ -1,12 +1,14 @@
-import { Outlet } from "@remix-run/react";
+import { Outlet, useLoaderData } from "@remix-run/react";
 import { redirect, type LoaderFunctionArgs } from "@remix-run/server-runtime";
+import { RouteErrorDisplay } from "~/components/ErrorDisplay";
+import { DashboardAgent } from "~/components/dashboard-agent/DashboardAgent";
 import { prisma } from "~/db.server";
-import { redirectWithErrorMessage } from "~/models/message.server";
 import { updateCurrentProjectEnvironmentId } from "~/services/dashboardPreferences.server";
 import { logger } from "~/services/logger.server";
 import { requireUser } from "~/services/session.server";
 import { tenantContext } from "~/services/tenantContext.server";
 import { EnvironmentParamSchema, v3ProjectPath } from "~/utils/pathBuilder";
+import { canAccessDashboardAgent } from "~/v3/canAccessDashboardAgent.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const user = await requireUser(request);
@@ -28,7 +30,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     select: {
       id: true,
       externalRef: true,
-      organization: { select: { id: true } },
+      organization: { select: { id: true, featureFlags: true } },
       environments: {
         select: {
           id: true,
@@ -84,9 +86,38 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
   await updateCurrentProjectEnvironmentId({ user: user, projectId: project.id, environmentId });
 
-  return project;
+  // Resolve dashboard-agent access here (single source of truth: global env,
+  // admins/impersonators, then the global/per-org feature flag, default off) so
+  // the launcher button is hidden when it's not enabled. The org's featureFlags
+  // came from the membership-checked project query above, so we pass them in to
+  // avoid a second org lookup.
+  const hasDashboardAgentAccess = await canAccessDashboardAgent({
+    userId: user.id,
+    isAdmin: user.admin,
+    isImpersonating: user.isImpersonating,
+    organizationSlug,
+    orgFeatureFlags: (project.organization.featureFlags as Record<string, unknown>) ?? {},
+  });
+
+  return {
+    ...project,
+    hasDashboardAgentAccess,
+  };
 };
 
 export default function Page() {
-  return <Outlet />;
+  const { hasDashboardAgentAccess } = useLoaderData<typeof loader>();
+  return (
+    <DashboardAgent hasAccess={hasDashboardAgentAccess}>
+      <Outlet />
+    </DashboardAgent>
+  );
+}
+
+// Caught here (inside the project SideMenu's Outlet) rather than at the project
+// layout, so a permission denial or error on any env-scoped page renders in the
+// content pane with the SideMenu intact. RouteErrorDisplay renders the
+// permission panel for a 403 and the generic error otherwise.
+export function ErrorBoundary() {
+  return <RouteErrorDisplay />;
 }

@@ -1,9 +1,11 @@
-import {
+import type {
   AttemptStatus,
   RunStatus,
   SerializedError,
-  TaskRunError,
   TriggerFunction,
+} from "@trigger.dev/core/v3";
+import {
+  TaskRunError,
   conditionallyImportPacket,
   createJsonErrorObject,
   logger,
@@ -11,17 +13,19 @@ import {
 import { parsePacketAsJson } from "@trigger.dev/core/v3/utils/ioSerialization";
 import { BatchId } from "@trigger.dev/core/v3/isomorphic";
 import { getUserProvidedIdempotencyKey } from "@trigger.dev/core/v3/serverOnly";
-import { Prisma, TaskRunAttemptStatus, TaskRunStatus } from "@trigger.dev/database";
+import type { Prisma, TaskRunAttemptStatus, TaskRunStatus } from "@trigger.dev/database";
 import assertNever from "assert-never";
-import { API_VERSIONS, CURRENT_API_VERSION, RunStatusUnspecifiedApiVersion } from "~/api/versions";
+import type { API_VERSIONS, RunStatusUnspecifiedApiVersion } from "~/api/versions";
+import { CURRENT_API_VERSION } from "~/api/versions";
 import { $replica, prisma } from "~/db.server";
-import { baseWorkerQueue } from "~/runEngine/concerns/workerQueueSplit.server";
-import { AuthenticatedEnvironment } from "~/services/apiAuth.server";
+import { regionForDisplay } from "~/runEngine/concerns/workerQueueSplit.server";
+import type { AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import {
   findRunByIdWithMollifierFallback,
   type SyntheticRun,
 } from "~/v3/mollifier/readFallback.server";
 import { generatePresignedUrl } from "~/v3/objectStore.server";
+import { runStore } from "~/v3/runStore.server";
 import { tracer } from "~/v3/tracer.server";
 import { startSpanWithEnv } from "~/v3/tracing.server";
 
@@ -49,6 +53,7 @@ const commonRunSelect = {
   depth: true,
   scheduleId: true,
   workerQueue: true,
+  region: true,
   lockedToVersion: {
     select: {
       version: true,
@@ -107,40 +112,43 @@ export class ApiRetrieveRunPresenter {
 
   public static async findRun(
     friendlyId: string,
-    env: AuthenticatedEnvironment,
+    env: AuthenticatedEnvironment
   ): Promise<FoundRun | null> {
-    const pgRow = await $replica.taskRun.findFirst({
-      where: {
+    const pgRow = await runStore.findRun(
+      {
         friendlyId,
         runtimeEnvironmentId: env.id,
       },
-      select: {
-        ...commonRunSelect,
-        traceId: true,
-        payload: true,
-        payloadType: true,
-        output: true,
-        outputType: true,
-        error: true,
-        attempts: {
-          select: {
-            id: true,
+      {
+        select: {
+          ...commonRunSelect,
+          traceId: true,
+          payload: true,
+          payloadType: true,
+          output: true,
+          outputType: true,
+          error: true,
+          attempts: {
+            select: {
+              id: true,
+            },
+          },
+          attemptNumber: true,
+          engine: true,
+          taskEventStore: true,
+          parentTaskRun: {
+            select: commonRunSelect,
+          },
+          rootTaskRun: {
+            select: commonRunSelect,
+          },
+          childRuns: {
+            select: commonRunSelect,
           },
         },
-        attemptNumber: true,
-        engine: true,
-        taskEventStore: true,
-        parentTaskRun: {
-          select: commonRunSelect,
-        },
-        rootTaskRun: {
-          select: commonRunSelect,
-        },
-        childRuns: {
-          select: commonRunSelect,
-        },
       },
-    });
+      $replica
+    );
 
     if (pgRow) return { ...pgRow, isBuffered: false };
 
@@ -235,7 +243,7 @@ export class ApiRetrieveRunPresenter {
         schedule: await resolveSchedule(taskRun),
         // We're removing attempts from the API
         attemptCount:
-          taskRun.engine === "V1" ? taskRun.attempts.length : taskRun.attemptNumber ?? 0,
+          taskRun.engine === "V1" ? taskRun.attempts.length : (taskRun.attemptNumber ?? 0),
         attempts: [],
         relatedRuns: {
           root: taskRun.rootTaskRun
@@ -520,7 +528,7 @@ async function createCommonRunStructure(run: CommonRelatedRun, apiVersion: API_V
     triggerFunction: resolveTriggerFunction(run),
     batchId: run.batch?.friendlyId,
     metadata,
-    region: run.workerQueue ? baseWorkerQueue(run.workerQueue) : undefined,
+    region: regionForDisplay(run.region, run.workerQueue),
   };
 }
 
@@ -638,8 +646,7 @@ export function synthesiseFoundRunFromBuffer(buffered: SyntheticRun): FoundRun {
     // FAILED (the buffer entry has no separate "failedAt" — the
     // best-available approximation of when the terminal state landed
     // is the entry's creation time).
-    completedAt:
-      buffered.cancelledAt ?? (status === "SYSTEM_FAILURE" ? buffered.createdAt : null),
+    completedAt: buffered.cancelledAt ?? (status === "SYSTEM_FAILURE" ? buffered.createdAt : null),
     expiredAt: null,
     delayUntil: buffered.delayUntil ?? null,
     metadata,
@@ -684,6 +691,7 @@ export function synthesiseFoundRunFromBuffer(buffered: SyntheticRun): FoundRun {
     // API response's `region` to undefined instead of advertising a
     // misleading "main" region for a not-yet-assigned buffered run).
     workerQueue: buffered.workerQueue ?? "",
+    region: buffered.region ?? "",
     parentTaskRun: null,
     rootTaskRun: null,
     childRuns: [],

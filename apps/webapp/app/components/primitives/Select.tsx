@@ -70,8 +70,10 @@ function isSection<TItem>(data: TItem[] | Section<TItem>[]): data is Section<TIt
 }
 
 type ItemFromSection<TItemOrSection> = TItemOrSection extends Section<infer U> ? U : TItemOrSection;
-export interface SelectProps<TValue extends string | string[], TItem>
-  extends Omit<Ariakit.SelectProps, "children"> {
+export interface SelectProps<TValue extends string | string[], TItem> extends Omit<
+  Ariakit.SelectProps,
+  "children"
+> {
   icon?: React.ReactNode;
   text?: React.ReactNode | ((value: TValue) => React.ReactNode);
   placeholder?: React.ReactNode;
@@ -221,11 +223,9 @@ export function Select<TValue extends string | string[], TItem>({
           {typeof children === "function" ? (
             matches.length > 0 ? (
               isSection(matches) ? (
-                <SelectGroupedRenderer
-                  items={matches}
-                  children={children}
-                  enableItemShortcuts={enableItemShortcuts}
-                />
+                <SelectGroupedRenderer items={matches} enableItemShortcuts={enableItemShortcuts}>
+                  {children}
+                </SelectGroupedRenderer>
               ) : (
                 children(matches as ItemFromSection<TItem>[], {
                   shortcutsEnabled: enableItemShortcuts,
@@ -314,10 +314,10 @@ export function SelectTrigger({
         {(value) => (
           <>
             {typeof value === "string"
-              ? value ?? placeholder
+              ? (value ?? placeholder)
               : value.length === 0
-              ? placeholder
-              : value.join(", ")}
+                ? placeholder
+                : value.join(", ")}
           </>
         )}
       </SelectValue>
@@ -376,8 +376,9 @@ export function SelectTrigger({
   );
 }
 
-export interface SelectProviderProps<TValue extends string | string[]>
-  extends Ariakit.SelectProviderProps<TValue> {}
+export interface SelectProviderProps<
+  TValue extends string | string[],
+> extends Ariakit.SelectProviderProps<TValue> {}
 export function SelectProvider<TValue extends string | string[]>(
   props: SelectProviderProps<TValue>
 ) {
@@ -469,9 +470,7 @@ export function SelectItem({
   // SelectLinkItem (which uses render to swap in a <Link>) get their
   // render prop silently dropped, which is why those rows looked
   // clickable but didn't navigate.
-  const render = combobox
-    ? <Ariakit.ComboboxItem render={props.render} />
-    : props.render;
+  const render = combobox ? <Ariakit.ComboboxItem render={props.render} /> : props.render;
   const ref = React.useRef<HTMLDivElement>(null);
   const select = Ariakit.useSelectContext();
   const selectValue = select?.useState("value");

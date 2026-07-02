@@ -1,6 +1,6 @@
-import { ClickHouseSettings } from "@clickhouse/client";
+import type { ClickHouseSettings } from "@clickhouse/client";
 import { z } from "zod";
-import { ClickhouseReader, ClickhouseWriter } from "./client/types.js";
+import type { ClickhouseReader, ClickhouseWriter } from "./client/types.js";
 
 export const TaskRunV2 = z.object({
   environment_id: z.string(),
@@ -48,6 +48,8 @@ export const TaskRunV2 = z.object({
   concurrency_key: z.string().default(""),
   bulk_action_group_ids: z.array(z.string()).default([]),
   worker_queue: z.string().default(""),
+  region: z.string().default(""),
+  plan_type: z.string().default(""),
   max_duration_in_seconds: z.number().int().nullish(),
   trigger_source: z.string().default(""),
   root_trigger_source: z.string().default(""),
@@ -108,6 +110,8 @@ export const TASK_RUN_COLUMNS = [
   "concurrency_key",
   "bulk_action_group_ids",
   "worker_queue",
+  "region",
+  "plan_type",
   "max_duration_in_seconds",
   "trigger_source",
   "root_trigger_source",
@@ -175,6 +179,8 @@ export type TaskRunFieldTypes = {
   concurrency_key: string;
   bulk_action_group_ids: string[];
   worker_queue: string;
+  region: string;
+  plan_type: string;
   max_duration_in_seconds: number | null;
   trigger_source: string;
   root_trigger_source: string;
@@ -205,6 +211,7 @@ export function insertTaskRunsCompactArrays(ch: ClickhouseWriter, settings?: Cli
     settings: {
       enable_json_type: 1,
       type_json_skip_duplicated_paths: 1,
+      input_format_json_infer_array_of_dynamic_from_array_of_different_types: 1,
       ...settings,
     },
   });
@@ -219,6 +226,7 @@ export function insertTaskRuns(ch: ClickhouseWriter, settings?: ClickHouseSettin
     settings: {
       enable_json_type: 1,
       type_json_skip_duplicated_paths: 1,
+      input_format_json_infer_array_of_dynamic_from_array_of_different_types: 1,
       ...settings,
     },
   });
@@ -313,6 +321,8 @@ export type TaskRunInsertArray = [
   concurrency_key: string,
   bulk_action_group_ids: string[],
   worker_queue: string,
+  region: string,
+  plan_type: string,
   max_duration_in_seconds: number | null,
   trigger_source: string,
   root_trigger_source: string,
@@ -341,6 +351,7 @@ export function insertRawTaskRunPayloadsCompactArrays(
       async_insert_busy_timeout_ms: 1000,
       enable_json_type: 1,
       type_json_skip_duplicated_paths: 1,
+      input_format_json_infer_array_of_dynamic_from_array_of_different_types: 1,
       ...settings,
     },
   });
@@ -359,6 +370,7 @@ export function insertRawTaskRunPayloads(ch: ClickhouseWriter, settings?: ClickH
       async_insert_busy_timeout_ms: 1000,
       enable_json_type: 1,
       type_json_skip_duplicated_paths: 1,
+      input_format_json_infer_array_of_dynamic_from_array_of_different_types: 1,
       ...settings,
     },
   });

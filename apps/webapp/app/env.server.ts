@@ -8,18 +8,13 @@ import { isValidDuration } from "./services/realtime/duration.server";
 // `z.string()` constrained to a `parseDuration`-parseable string (e.g.
 // `7d`, `1h`). Validated at boot so a typo'd duration fails fast.
 function durationString() {
-  return z
-    .string()
-    .refine(isValidDuration, "must be a duration like 7d, 30d, 365d, 1h, 1y");
+  return z.string().refine(isValidDuration, "must be a duration like 7d, 30d, 365d, 1h, 1y");
 }
 
 // Parses a CSV of machine preset names (e.g. "small-1x,small-2x") into a
 // non-empty array of MachinePresetName. Used by COMPUTE_TEMPLATE_MACHINE_PRESETS
 // and its _REQUIRED variant. Adds zod issues for empty input or unknown names.
-const parseMachinePresetCsv = (
-  raw: string,
-  ctx: z.RefinementCtx
-): MachinePresetName[] => {
+const parseMachinePresetCsv = (raw: string, ctx: z.RefinementCtx): MachinePresetName[] => {
   const names = raw
     .split(",")
     .map((s) => s.trim())
@@ -102,6 +97,27 @@ const EnvironmentSchema = z
     DATABASE_CONNECTION_LIMIT: z.coerce.number().int().default(10),
     DATABASE_POOL_TIMEOUT: z.coerce.number().int().default(60),
     DATABASE_CONNECTION_TIMEOUT: z.coerce.number().int().default(20),
+    // Dashboard-agent conversation store. Cloud points this at the dedicated
+    // PlanetScale database; when unset it falls back to DATABASE_URL (OSS), where
+    // the tables live in the isolated `trigger_dashboard_agent` schema.
+    DASHBOARD_AGENT_DATABASE_URL: z.string().optional(),
+    // The secret key (tr_*) for the runtime environment the dashboard-agent task
+    // is deployed to. The chat session is created in that environment via the
+    // standard chat.agent SDK flow. When unset, the live agent is disabled — the
+    // conversation store / History still work, no chat can start.
+    DASHBOARD_AGENT_SECRET_KEY: z.string().optional(),
+    // Global default for the `hasDashboardAgentAccess` flag. "0" (off) ships the
+    // agent dark; flip to "1" to enable it for everyone at GA. Per-org overrides
+    // (org featureFlags) win regardless.
+    DASHBOARD_AGENT_ENABLED: z.string().default("0"),
+    // "1" gives admins/impersonators an everywhere-preview (default off),
+    // separate from the per-org rollout flag above.
+    DASHBOARD_AGENT_ADMIN_PREVIEW: z.string().default("0"),
+    // Anthropic key for the dashboard agent's Head Start route only (the warm
+    // first-turn step-1 LLM call runs in this process). The agent run itself
+    // uses its own key on the Trigger side. When unset, Head Start is disabled
+    // and the first turn falls back to the normal cold-start path.
+    ANTHROPIC_API_KEY: z.string().optional(),
     DIRECT_URL: z
       .string()
       .refine(
@@ -158,6 +174,9 @@ const EnvironmentSchema = z
     WORKER_SCHEMA: z.string().default("graphile_worker"),
     WORKER_CONCURRENCY: z.coerce.number().int().default(10),
     WORKER_POLL_INTERVAL: z.coerce.number().int().default(1000),
+    // How often each replica reloads the global flags snapshot from the DB.
+    // Sets kill/ramp propagation latency.
+    GLOBAL_FLAGS_RELOAD_INTERVAL_MS: z.coerce.number().int().min(1000).default(5000),
     WORKER_ENABLED: z.string().default("true"),
     GRACEFUL_SHUTDOWN_TIMEOUT: z.coerce.number().int().default(60000),
     DISABLE_SSE: z.string().optional(),
@@ -518,10 +537,7 @@ const EnvironmentSchema = z
       .string()
       .optional()
       .transform((v, ctx) =>
-        parseMachinePresetCsv(
-          v ?? process.env.COMPUTE_TEMPLATE_MACHINE_PRESETS ?? "small-1x",
-          ctx
-        )
+        parseMachinePresetCsv(v ?? process.env.COMPUTE_TEMPLATE_MACHINE_PRESETS ?? "small-1x", ctx)
       ),
 
     DEPLOY_IMAGE_PLATFORM: z.string().default("linux/amd64"),
@@ -571,6 +587,19 @@ const EnvironmentSchema = z
     // so they are unaffected. Defaults to off so detection can run in
     // log-only mode before enforcement.
     DEPRECATE_V3_CLI_DEPLOYS_ENABLED: z.string().default("0"),
+
+    // Master switch for the v3 engine (RunEngineVersion.V1) shutdown. When
+    // enabled it: rejects triggers that resolve to V1 (single, batch, schedule,
+    // replay, triggerAndWait) with a graceful error pointing at the v4 migration
+    // guide; closes the legacy `trigger dev` websocket used by v3 CLIs; and turns
+    // the V1 run-lifecycle background jobs (heartbeat timeout, TTL expiry, retry,
+    // resume, scheduled fires) into no-ops so abandoned V1 runs stop generating
+    // database load. v4 (V2) is never affected (every gate also checks the run is
+    // V1). Defaults to off so self-hosted instances still on V1 keep working.
+    DEPRECATE_V3_ENABLED: z.string().default("0"),
+
+    // Verify the deploy image exists before promoting. Disable for out-of-band/air-gapped push. ECR only.
+    DEPLOY_IMAGE_VERIFICATION_ENABLED: BoolEnv.default(true),
 
     OBJECT_STORE_BASE_URL: z.string().optional(),
     OBJECT_STORE_BUCKET: z.string().optional(),
@@ -725,6 +754,7 @@ const EnvironmentSchema = z
     ALERT_RATE_LIMITER_REDIS_CLUSTER_MODE_ENABLED: z.string().default("0"),
 
     LOOPS_API_KEY: z.string().optional(),
+    ATTIO_API_KEY: z.string().optional(),
     MARQS_DISABLE_REBALANCING: BoolEnv.default(false),
     MARQS_VISIBILITY_TIMEOUT_MS: z.coerce
       .number()
@@ -845,7 +875,14 @@ const EnvironmentSchema = z
     RUN_ENGINE_RETRY_WARM_START_THRESHOLD_MS: z.coerce.number().int().default(30_000),
     RUN_ENGINE_PROCESS_WORKER_QUEUE_DEBOUNCE_MS: z.coerce.number().int().default(200),
     RUN_ENGINE_DEQUEUE_BLOCKING_TIMEOUT_SECONDS: z.coerce.number().int().default(10),
+    RUN_ENGINE_DEQUEUE_DISABLED_WORKER_QUEUES: z.string().optional(),
     RUN_ENGINE_MASTER_QUEUE_CONSUMERS_INTERVAL_MS: z.coerce.number().int().default(1000),
+    // Off by default. Enable on a single service (e.g. the engine worker) so only one
+    // instance reports worker queue length, rather than every replica.
+    RUN_ENGINE_WORKER_QUEUE_OBSERVER_ENABLED: z.string().default("0"),
+    RUN_ENGINE_WORKER_QUEUE_OBSERVER_INTERVAL_MS: z.coerce.number().int().default(30_000),
+    // Comma-separated cloud providers to exclude from worker queue length observation.
+    RUN_ENGINE_WORKER_QUEUE_OBSERVER_EXCLUDED_CLOUD_PROVIDERS: z.string().default("digitalocean"),
     RUN_ENGINE_MASTER_QUEUE_COOLOFF_PERIOD_MS: z.coerce.number().int().default(10_000),
     RUN_ENGINE_MASTER_QUEUE_COOLOFF_COUNT_THRESHOLD: z.coerce.number().int().default(10),
     RUN_ENGINE_MASTER_QUEUE_CONSUMER_DEQUEUE_COUNT: z.coerce.number().int().default(10),
@@ -1215,7 +1252,9 @@ const EnvironmentSchema = z
     // setting this to "1" while `TRIGGER_MOLLIFIER_ENABLED` is "0" is a
     // no-op because the gate-side singleton refuses to construct a buffer
     // when the system is off.
-    TRIGGER_MOLLIFIER_DRAINER_ENABLED: z.string().default(process.env.TRIGGER_MOLLIFIER_ENABLED ?? "0"),
+    TRIGGER_MOLLIFIER_DRAINER_ENABLED: z
+      .string()
+      .default(process.env.TRIGGER_MOLLIFIER_ENABLED ?? "0"),
     TRIGGER_MOLLIFIER_SHADOW_MODE: z.string().default("0"),
     TRIGGER_MOLLIFIER_REDIS_HOST: z
       .string()
@@ -1225,7 +1264,7 @@ const EnvironmentSchema = z
       .number()
       .optional()
       .transform(
-        (v) => v ?? (process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT) : undefined),
+        (v) => v ?? (process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT) : undefined)
       ),
     TRIGGER_MOLLIFIER_REDIS_USERNAME: z
       .string()
@@ -1235,7 +1274,9 @@ const EnvironmentSchema = z
       .string()
       .optional()
       .transform((v) => v ?? process.env.REDIS_PASSWORD),
-    TRIGGER_MOLLIFIER_REDIS_TLS_DISABLED: z.string().default(process.env.REDIS_TLS_DISABLED ?? "false"),
+    TRIGGER_MOLLIFIER_REDIS_TLS_DISABLED: z
+      .string()
+      .default(process.env.REDIS_TLS_DISABLED ?? "false"),
     TRIGGER_MOLLIFIER_TRIP_WINDOW_MS: z.coerce.number().int().positive().default(200),
     TRIGGER_MOLLIFIER_TRIP_THRESHOLD: z.coerce.number().int().positive().default(100),
     TRIGGER_MOLLIFIER_HOLD_MS: z.coerce.number().int().positive().default(500),
@@ -1299,11 +1340,7 @@ const EnvironmentSchema = z
     // (retrieve, trace) have a safety net while PG replica lag settles.
     TRIGGER_MOLLIFIER_ACK_GRACE_TTL_SECONDS: z.coerce.number().int().positive().default(30),
     // ioredis per-request retry limit on the buffer's Redis client.
-    TRIGGER_MOLLIFIER_REDIS_MAX_RETRIES_PER_REQUEST: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(20),
+    TRIGGER_MOLLIFIER_REDIS_MAX_RETRIES_PER_REQUEST: z.coerce.number().int().positive().default(20),
     // ioredis reconnect backoff envelope for the buffer client: the base
     // grows by `STEP_MS` per attempt, capped at `MAX_MS`, then equal-jittered.
     TRIGGER_MOLLIFIER_REDIS_RECONNECT_STEP_MS: z.coerce.number().int().positive().default(50),
@@ -1507,6 +1544,39 @@ const EnvironmentSchema = z
     ALERTS_WORKER_REDIS_TLS_DISABLED: z.string().default(process.env.REDIS_TLS_DISABLED ?? "false"),
     ALERTS_WORKER_REDIS_CLUSTER_MODE_ENABLED: z.string().default("0"),
 
+    BILLING_LIMIT_WORKER_ENABLED: z.string().default(process.env.WORKER_ENABLED ?? "true"),
+    BILLING_LIMIT_WORKER_CONCURRENCY_WORKERS: z.coerce.number().int().default(2),
+    BILLING_LIMIT_WORKER_CONCURRENCY_TASKS_PER_WORKER: z.coerce.number().int().default(10),
+    BILLING_LIMIT_WORKER_POLL_INTERVAL: z.coerce.number().int().default(1000),
+    BILLING_LIMIT_WORKER_IMMEDIATE_POLL_INTERVAL: z.coerce.number().int().default(50),
+    BILLING_LIMIT_WORKER_CONCURRENCY_LIMIT: z.coerce.number().int().default(20),
+    BILLING_LIMIT_WORKER_SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().default(60_000),
+    BILLING_LIMIT_WORKER_LOG_LEVEL: z
+      .enum(["log", "error", "warn", "info", "debug"])
+      .default("info"),
+    BILLING_LIMIT_RECONCILE_INTERVAL_MS: z.coerce.number().int().default(90_000),
+    BILLING_LIMIT_WORKER_REDIS_HOST: z
+      .string()
+      .optional()
+      .transform((v) => v ?? process.env.REDIS_HOST),
+    BILLING_LIMIT_WORKER_REDIS_PORT: z.coerce
+      .number()
+      .optional()
+      .transform(
+        (v) => v ?? (process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT) : undefined)
+      ),
+    BILLING_LIMIT_WORKER_REDIS_USERNAME: z
+      .string()
+      .optional()
+      .transform((v) => v ?? process.env.REDIS_USERNAME),
+    BILLING_LIMIT_WORKER_REDIS_PASSWORD: z
+      .string()
+      .optional()
+      .transform((v) => v ?? process.env.REDIS_PASSWORD),
+    BILLING_LIMIT_WORKER_REDIS_TLS_DISABLED: z
+      .string()
+      .default(process.env.REDIS_TLS_DISABLED ?? "false"),
+
     SCHEDULE_ENGINE_LOG_LEVEL: z.enum(["log", "error", "warn", "info", "debug"]).default("info"),
     SCHEDULE_WORKER_ENABLED: z.string().default(process.env.WORKER_ENABLED ?? "true"),
     SCHEDULE_WORKER_CONCURRENCY_WORKERS: z.coerce.number().int().default(2),
@@ -1678,6 +1748,42 @@ const EnvironmentSchema = z
     CLICKHOUSE_LOGS_LIST_MAX_THREADS: z.coerce.number().int().default(2),
     CLICKHOUSE_LOGS_LIST_MAX_ROWS_TO_READ: z.coerce.number().int().default(10_000_000),
     CLICKHOUSE_LOGS_LIST_MAX_EXECUTION_TIME: z.coerce.number().int().default(120),
+    // Bound read-in-order memory on object-storage reads: each part opens a per-column read
+    // stream, and the default ~1 MiB+ S3 buffers dominate peak memory. These two byte sizes
+    // cap the per-stream buffers and exist on every supported ClickHouse, so they are always on.
+    CLICKHOUSE_LOGS_LIST_PREFETCH_BUFFER_SIZE: z.coerce
+      .number()
+      .int()
+      .nonnegative()
+      .default(262_144),
+    CLICKHOUSE_LOGS_LIST_MAX_READ_BUFFER_SIZE: z.coerce
+      .number()
+      .int()
+      .nonnegative()
+      .default(262_144),
+    // The decisive lever on Cloud SharedMergeTree, but it only exists on newer ClickHouse and
+    // is a no-op on local-disk MergeTree, so it is opt-in: unset means it is never sent (safe on
+    // any self-hosted version). Set to 0 on object-storage deployments to get the memory win.
+    CLICKHOUSE_LOGS_LIST_FILESYSTEM_CACHE_PREFER_BIGGER_BUFFER_SIZE: z.coerce
+      .number()
+      .int()
+      .nonnegative()
+      .optional(),
+
+    // Logs list pagination tuning (page sizing + recent-first probe windows).
+    LOGS_LIST_DEFAULT_PAGE_SIZE: z.coerce.number().int().positive().default(50),
+    LOGS_LIST_MAX_PAGE_SIZE: z.coerce.number().int().positive().default(100),
+    // Days back from the page ceiling to probe before widening to the full requested window,
+    // comma-separated. Empty disables narrowing (a single full-window query).
+    LOGS_LIST_RECENT_FIRST_PROBE_DAYS: z
+      .string()
+      .default("1,7")
+      .transform((s) =>
+        s
+          .split(",")
+          .map((v) => Number(v.trim()))
+          .filter((n) => Number.isFinite(n) && n > 0)
+      ),
 
     // Query feature flag
     QUERY_FEATURE_ENABLED: z.string().default("1"),
@@ -1746,7 +1852,10 @@ const EnvironmentSchema = z
       .optional()
       .transform((v) => v ?? process.env.CLICKHOUSE_URL),
     REALTIME_BACKEND_NATIVE_CLICKHOUSE_KEEP_ALIVE_ENABLED: z.string().default("1"),
-    REALTIME_BACKEND_NATIVE_CLICKHOUSE_KEEP_ALIVE_IDLE_SOCKET_TTL_MS: z.coerce.number().int().optional(),
+    REALTIME_BACKEND_NATIVE_CLICKHOUSE_KEEP_ALIVE_IDLE_SOCKET_TTL_MS: z.coerce
+      .number()
+      .int()
+      .optional(),
     REALTIME_BACKEND_NATIVE_CLICKHOUSE_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(10),
     REALTIME_BACKEND_NATIVE_CLICKHOUSE_LOG_LEVEL: z
       .enum(["log", "error", "warn", "info", "debug"])
@@ -1903,6 +2012,32 @@ const EnvironmentSchema = z
 
     // Force RBAC to not use the plugin
     RBAC_FORCE_FALLBACK: BoolEnv.default(false),
+
+    // Force SSO to not use the plugin (contributors without the cloud
+    // plugin installed can opt in to a clean OSS-only experience).
+    SSO_FORCE_FALLBACK: BoolEnv.default(false),
+    // Emit a console.log when the SSO fallback is selected because no
+    // plugin is installed. Default off so OSS deployments stay quiet.
+    SSO_LOG_FALLBACK: BoolEnv.default(false),
+    // Master deploy gate for the whole SSO feature. Default OFF so the
+    // image can ship dark and be flipped on only once the SSO plugin's
+    // backing services are available. When false, the SSO controller is
+    // forced to the OSS fallback — login link hidden, SSO login disabled,
+    // settings inert, and session re-validation skipped.
+    SSO_ENABLED: BoolEnv.default(false),
+    // How often (seconds) a live SSO session is re-validated against the
+    // identity provider. The check is single-flight per user, so this is
+    // the minimum interval between plugin round-trips, not a per-request
+    // cost. Defaults to 5 minutes: every active SSO user drives one
+    // billing→IdP round-trip per window, so a seconds-scale default
+    // exhausts vendor rate limits at trivial user counts (masked by
+    // fail-open, so it degrades silently).
+    SSO_SESSION_REVALIDATION_INTERVAL_SECONDS: z.coerce.number().int().positive().default(300),
+    // Hard timeout (ms) on the re-validation round-trip. If the SSO plugin
+    // doesn't answer within this window the check fails OPEN (session kept)
+    // and emits a `sso.revalidation.timeout` warn log — alert on an
+    // elevated rate of those to catch a slow/unhealthy SSO dependency.
+    SSO_SESSION_REVALIDATION_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
   })
   .and(GithubAppEnvSchema)
   .and(S2EnvSchema)

@@ -229,8 +229,8 @@ async function handleCreateAction(formData: FormData, userId: string, isPreview:
     startsAt: isPreview
       ? new Date().toISOString()
       : fields.startsAt
-      ? new Date(fields.startsAt + "Z").toISOString()
-      : new Date().toISOString(),
+        ? new Date(fields.startsAt + "Z").toISOString()
+        : new Date().toISOString(),
     endsAt: isPreview
       ? new Date(Date.now() + 60 * 60 * 1000).toISOString()
       : new Date(fields.endsAt + "Z").toISOString(),
@@ -458,7 +458,7 @@ export default function AdminNotificationsRoute() {
             ) : (
               notifications.map((n) => {
                 const status = getNotificationStatus(n);
-                const isActive = status === "active";
+                const _isActive = status === "active";
                 return (
                   <TableRow key={n.id} className="group/row">
                     <TableCell>
@@ -1107,10 +1107,7 @@ function NotificationForm({
                 >
                   {(items) =>
                     items.map((item) => (
-                      <SelectItem
-                        key={item === DISCOVERY_MATCH_NONE ? "none" : item}
-                        value={item}
-                      >
+                      <SelectItem key={item === DISCOVERY_MATCH_NONE ? "none" : item} value={item}>
                         {item === DISCOVERY_MATCH_NONE ? DISCOVERY_MATCH_LABEL : item}
                       </SelectItem>
                     ))

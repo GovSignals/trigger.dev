@@ -3,7 +3,6 @@ import { type LoaderFunctionArgs } from "@remix-run/server-runtime";
 import { Fragment } from "react";
 import { redirect, typedjson, useTypedLoaderData } from "remix-typedjson";
 import { AppContainer } from "~/components/layout/AppLayout";
-import { env } from "~/env.server";
 import { requireUser } from "~/services/session.server";
 import { cn } from "~/utils/cn";
 
@@ -59,6 +58,10 @@ const stories: Story[] = [
   {
     name: "Free plan usage",
     slug: "free-plan-usage",
+  },
+  {
+    name: "Icons",
+    slug: "icons",
   },
   {
     name: "Info panel",
@@ -151,6 +154,12 @@ const stories: Story[] = [
   {
     name: "Usage",
     slug: "usage",
+  },
+  // Dashboard agent section
+  {
+    sectionTitle: "Dashboard agent",
+    name: "Agent UI",
+    slug: "agent-ui",
   },
   // Forms section
   {

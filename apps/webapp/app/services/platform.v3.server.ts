@@ -1,3 +1,5 @@
+import { createLRUMemoryStore } from "@internal/cache";
+import { metrics } from "@opentelemetry/api";
 import { MachinePresetName, tryCatch } from "@trigger.dev/core/v3";
 import type { RuntimeEnvironmentType } from "@trigger.dev/database";
 import {
@@ -6,31 +8,41 @@ import {
   machines as machinesFromPlatform,
   type BillingAlertsResult,
   type CreatePrivateLinkConnectionBody,
+  type CurrentPlan,
   type Limits,
   type MachineCode,
   type PrivateLinkConnection,
   type PrivateLinkConnectionList,
   type PrivateLinkRegionsResult,
-  type ReportUsageResult,
   type SetPlanBody,
   type UpdateBillingAlertsRequest,
   type UsageResult,
   type UsageSeriesParams,
-  type CurrentPlan,
 } from "@trigger.dev/platform";
 import { createCache, DefaultStatefulContext, Namespace } from "@unkey/cache";
-import { createLRUMemoryStore } from "@internal/cache";
 import { existsSync, readFileSync } from "node:fs";
 import { redirect } from "remix-typedjson";
 import { z } from "zod";
+import { $replica } from "~/db.server";
 import { env } from "~/env.server";
 import { redirectWithErrorMessage, redirectWithSuccessMessage } from "~/models/message.server";
+import {
+  asPlatformSchema,
+  BillingLimitResultSchema,
+  BillingLimitsActiveResultSchema,
+  BillingLimitsPendingResolvesResultSchema,
+  EntitlementResultSchema,
+  type BillingLimitResult,
+  type BillingLimitsActiveResult,
+  type BillingLimitsPendingResolvesResult,
+  type EntitlementResult,
+  type ResolveBillingLimitRequest,
+  type UpdateBillingLimitRequest,
+} from "~/services/billingLimit.schemas";
 import { logger } from "~/services/logger.server";
 import { newProjectPath, organizationBillingPath } from "~/utils/pathBuilder";
 import { singleton } from "~/utils/singleton";
 import { RedisCacheStore } from "./unkey/redisCacheStore.server";
-import { $replica } from "~/db.server";
-import { metrics } from "@opentelemetry/api";
 
 function initializeClient() {
   if (isCloud() && process.env.BILLING_API_URL && process.env.BILLING_API_KEY) {
@@ -62,15 +74,13 @@ const platformClientMeter = metrics.getMeter("trigger.dev/platform-client");
 const platformClientFailuresCounter = platformClientMeter.createCounter(
   "platform_client.failures_total",
   {
-    description:
-      "Failures returned or thrown by @trigger.dev/platform billing client calls",
+    description: "Failures returned or thrown by @trigger.dev/platform billing client calls",
   }
 );
 
 function recordPlatformFailure(fn: string, kind: "caught" | "no_success") {
   platformClientFailuresCounter.add(1, { function: fn, kind });
 }
-
 
 function initializePlatformCache() {
   const ctx = new DefaultStatefulContext();
@@ -99,10 +109,15 @@ function initializePlatformCache() {
       fresh: 60_000 * 5, // 5 minutes
       stale: 60_000 * 10, // 10 minutes
     }),
-    entitlement: new Namespace<ReportUsageResult>(ctx, {
+    entitlement: new Namespace<EntitlementResult>(ctx, {
       stores: [memory, redisCacheStore],
       fresh: 60_000, // serve without revalidation for 60s
       stale: 120_000, // total TTL — fresh 0-60s, stale-revalidate 60-120s
+    }),
+    billingLimit: new Namespace<BillingLimitResult>(ctx, {
+      stores: [memory, redisCacheStore],
+      fresh: 60_000,
+      stale: 120_000,
     }),
   });
 
@@ -110,6 +125,15 @@ function initializePlatformCache() {
 }
 
 const platformCache = singleton("platformCache", initializePlatformCache);
+
+function invalidateBillingLimitCaches(organizationId: string) {
+  platformCache.billingLimit.remove(organizationId).catch(() => {});
+  platformCache.entitlement.remove(organizationId).catch(() => {});
+}
+
+export function bustBillingLimitCaches(organizationId: string) {
+  invalidateBillingLimitCaches(organizationId);
+}
 
 type Machines = typeof machinesFromPlatform;
 
@@ -249,10 +273,34 @@ export async function getCurrentPlan(orgId: string) {
     };
 
     return { ...result, usage };
-  } catch (e) {
+  } catch (_e) {
     recordPlatformFailure("getCurrentPlan", "caught");
     return undefined;
   }
+}
+
+export type SelfServePurchaseBlockReason = "plan_unavailable" | "managed_billing";
+
+/**
+ * When cloud billing is configured, self-serve purchase endpoints must fail closed
+ * if the current plan can't be loaded or the org is on managed billing.
+ */
+export function getSelfServePurchaseBlockReason(
+  currentPlan: Awaited<ReturnType<typeof getCurrentPlan>>
+): SelfServePurchaseBlockReason | undefined {
+  if (!isBillingConfigured()) {
+    return undefined;
+  }
+
+  if (!currentPlan) {
+    return "plan_unavailable";
+  }
+
+  if (currentPlan.v3Subscription?.showSelfServe === false) {
+    return "managed_billing";
+  }
+
+  return undefined;
 }
 
 export async function getLimits(orgId: string) {
@@ -266,7 +314,7 @@ export async function getLimits(orgId: string) {
     }
 
     return result.v3Subscription?.plan?.limits;
-  } catch (e) {
+  } catch (_e) {
     recordPlatformFailure("getLimits", "caught");
     return undefined;
   }
@@ -342,7 +390,7 @@ export async function customerPortalUrl(orgId: string, orgSlug: string) {
     return client.createPortalSession(orgId, {
       returnUrl: `${env.APP_ORIGIN}${organizationBillingPath({ slug: orgSlug })}`,
     });
-  } catch (e) {
+  } catch (_e) {
     recordPlatformFailure("customerPortalUrl", "caught");
     return undefined;
   }
@@ -358,7 +406,7 @@ export async function getPlans() {
       return undefined;
     }
     return result;
-  } catch (e) {
+  } catch (_e) {
     recordPlatformFailure("getPlans", "caught");
     return undefined;
   }
@@ -394,23 +442,12 @@ export async function setPlan(
   }
 
   switch (result.action) {
-    case "free_connect_required": {
-      return redirect(result.connectUrl);
-    }
+    case "free_connect_required":
     case "free_connected": {
-      if (result.accepted) {
-        // Invalidate billing cache since plan changed
-        opts?.invalidateBillingCache?.(organization.id);
-        platformCache.entitlement.remove(organization.id).catch(() => {});
-        return redirect(newProjectPath(organization, "You're on the Free plan."));
-      } else {
-        return redirectWithErrorMessage(
-          callerPath,
-          request,
-          "Free tier unlock failed, your GitHub account is too new.",
-          { ephemeral: false }
-        );
-      }
+      // Selecting Free provisions the plan directly, so any free result is a success.
+      opts?.invalidateBillingCache?.(organization.id);
+      platformCache.entitlement.remove(organization.id).catch(() => {});
+      return redirect(newProjectPath(organization, "You're on the Free plan."));
     }
     case "create_subscription_flow_start": {
       return redirect(result.checkoutUrl);
@@ -440,7 +477,7 @@ export async function setConcurrencyAddOn(organizationId: string, amount: number
       return undefined;
     }
     return result;
-  } catch (e) {
+  } catch (_e) {
     recordPlatformFailure("setConcurrencyAddOn", "caught");
     return undefined;
   }
@@ -456,7 +493,7 @@ export async function setSeatsAddOn(organizationId: string, amount: number) {
       return undefined;
     }
     return result;
-  } catch (e) {
+  } catch (_e) {
     recordPlatformFailure("setSeatsAddOn", "caught");
     return undefined;
   }
@@ -472,7 +509,7 @@ export async function setBranchesAddOn(organizationId: string, amount: number) {
       return undefined;
     }
     return result;
-  } catch (e) {
+  } catch (_e) {
     recordPlatformFailure("setBranchesAddOn", "caught");
     return undefined;
   }
@@ -488,7 +525,7 @@ export async function setSchedulesAddOn(organizationId: string, amount: number) 
       return undefined;
     }
     return result;
-  } catch (e) {
+  } catch (_e) {
     recordPlatformFailure("setSchedulesAddOn", "caught");
     return undefined;
   }
@@ -504,7 +541,7 @@ export async function getUsage(organizationId: string, { from, to }: { from: Dat
       return undefined;
     }
     return result;
-  } catch (e) {
+  } catch (_e) {
     recordPlatformFailure("getUsage", "caught");
     return undefined;
   }
@@ -516,16 +553,21 @@ export async function getCachedUsage(
 ) {
   if (!client) return undefined;
 
-  const result = await platformCache.usage.swr(
-    `${organizationId}:${from.toISOString()}:${to.toISOString()}`,
-    async () => {
-      const usageResponse = await getUsage(organizationId, { from, to });
+  try {
+    const result = await platformCache.usage.swr(
+      `${organizationId}:${from.toISOString()}:${to.toISOString()}`,
+      async () => {
+        const usageResponse = await getUsage(organizationId, { from, to });
 
-      return usageResponse;
-    }
-  );
+        return usageResponse;
+      }
+    );
 
-  return result.val;
+    return result.val;
+  } catch (_e) {
+    recordPlatformFailure("getCachedUsage", "caught");
+    return undefined;
+  }
 }
 
 export async function getUsageSeries(organizationId: string, params: UsageSeriesParams) {
@@ -538,7 +580,7 @@ export async function getUsageSeries(organizationId: string, params: UsageSeries
       return undefined;
     }
     return result;
-  } catch (e) {
+  } catch (_e) {
     recordPlatformFailure("getUsageSeries", "caught");
     return undefined;
   }
@@ -562,7 +604,7 @@ export async function reportInvocationUsage(
       return undefined;
     }
     return result;
-  } catch (e) {
+  } catch (_e) {
     recordPlatformFailure("reportInvocationUsage", "caught");
     return undefined;
   }
@@ -580,7 +622,7 @@ export async function reportComputeUsage(request: Request) {
 
 export async function getEntitlement(
   organizationId: string
-): Promise<ReportUsageResult | undefined> {
+): Promise<EntitlementResult | undefined> {
   if (!client) return undefined;
 
   // Errors must be caught inside the loader — @unkey/cache passes the loader
@@ -592,13 +634,16 @@ export async function getEntitlement(
   // SWR call so it never becomes a cached access decision.
   const result = await platformCache.entitlement.swr(organizationId, async () => {
     try {
-      const response = await client.getEntitlement(organizationId);
+      const response = await client.fetch(
+        `/api/v1/orgs/${organizationId}/usage/entitlement`,
+        asPlatformSchema(EntitlementResultSchema)
+      );
       if (!response.success) {
         recordPlatformFailure("getEntitlement", "no_success");
         return undefined;
       }
       return response;
-    } catch (e) {
+    } catch (_e) {
       recordPlatformFailure("getEntitlement", "caught");
       return undefined;
     }
@@ -611,6 +656,160 @@ export async function getEntitlement(
   }
 
   return result.val;
+}
+
+export async function getBillingLimit(
+  organizationId: string
+): Promise<BillingLimitResult | undefined> {
+  if (!client) return undefined;
+
+  // Loader callback errors are caught below; also guard the SWR read itself so
+  // Redis/cache infra failures cannot reject org-layout Promise.all callers.
+  try {
+    const result = await platformCache.billingLimit.swr(organizationId, async () => {
+      try {
+        const response = await client.fetch(
+          `/api/v1/orgs/${organizationId}/billing-limit`,
+          asPlatformSchema(BillingLimitResultSchema)
+        );
+        if (!response.success) {
+          recordPlatformFailure("getBillingLimit", "no_success");
+          return undefined;
+        }
+        return response;
+      } catch (_e) {
+        recordPlatformFailure("getBillingLimit", "caught");
+        return undefined;
+      }
+    });
+
+    if (result.err || result.val === undefined) {
+      return undefined;
+    }
+
+    return result.val;
+  } catch (_e) {
+    recordPlatformFailure("getBillingLimit", "caught");
+    return undefined;
+  }
+}
+
+export async function setBillingLimit(
+  organizationId: string,
+  config: UpdateBillingLimitRequest
+): Promise<BillingLimitResult | undefined> {
+  if (!client) return undefined;
+
+  const response = await client.fetch(
+    `/api/v1/orgs/${organizationId}/billing-limit`,
+    asPlatformSchema(BillingLimitResultSchema),
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(config),
+    }
+  );
+
+  if (!response.success) {
+    recordPlatformFailure("setBillingLimit", "no_success");
+    throw new Error(response.error ?? "Error setting billing limit");
+  }
+
+  invalidateBillingLimitCaches(organizationId);
+  return response;
+}
+
+export async function resolveBillingLimit(
+  organizationId: string,
+  payload: ResolveBillingLimitRequest
+): Promise<BillingLimitResult | undefined> {
+  if (!client) return undefined;
+
+  const response = await client.fetch(
+    `/api/v1/orgs/${organizationId}/billing-limit/resolve`,
+    asPlatformSchema(BillingLimitResultSchema),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  if (!response.success) {
+    recordPlatformFailure("resolveBillingLimit", "no_success");
+    throw new Error(response.error ?? "Error resolving billing limit");
+  }
+
+  invalidateBillingLimitCaches(organizationId);
+  return response;
+}
+
+/** Admin: orgs currently in grace or rejected — used by reconciliation worker (Phase 2). */
+export async function getActiveBillingLimits(): Promise<BillingLimitsActiveResult | undefined> {
+  if (!client) return undefined;
+
+  try {
+    const response = await client.fetch(
+      `/api/v1/billing-limits/active`,
+      asPlatformSchema(BillingLimitsActiveResultSchema)
+    );
+    if (!response.success) {
+      recordPlatformFailure("getActiveBillingLimits", "no_success");
+      return undefined;
+    }
+    return response;
+  } catch (_e) {
+    recordPlatformFailure("getActiveBillingLimits", "caught");
+    return undefined;
+  }
+}
+
+/** Admin: orgs with pending resolve side effects — used by reconciliation worker. */
+export async function getPendingBillingLimitResolves(): Promise<
+  BillingLimitsPendingResolvesResult | undefined
+> {
+  if (!client) return undefined;
+
+  try {
+    const response = await client.fetch(
+      `/api/v1/billing-limits/pending-resolves`,
+      asPlatformSchema(BillingLimitsPendingResolvesResultSchema)
+    );
+    if (!response.success) {
+      recordPlatformFailure("getPendingBillingLimitResolves", "no_success");
+      return undefined;
+    }
+    return response;
+  } catch (_e) {
+    recordPlatformFailure("getPendingBillingLimitResolves", "caught");
+    return undefined;
+  }
+}
+
+/** Admin: mark billing limit resolve side effects as completed after webapp convergence. */
+export async function completeBillingLimitResolve(
+  organizationId: string
+): Promise<{ completed: boolean } | undefined> {
+  if (!client) return undefined;
+
+  const response = await client.fetch(
+    `/api/v1/orgs/${organizationId}/billing-limit/resolve-complete`,
+    asPlatformSchema(z.object({ completed: z.boolean() })),
+    {
+      method: "POST",
+    }
+  );
+
+  if (!response.success) {
+    recordPlatformFailure("completeBillingLimitResolve", "no_success");
+    throw new Error(response.error ?? "Error completing billing limit resolve");
+  }
+
+  return response;
 }
 
 export async function getBillingAlerts(
@@ -776,6 +975,17 @@ export async function triggerInitialDeployment(
     });
   }
 }
+
+export type {
+  BillingLimitConfig,
+  BillingLimitPageData,
+  BillingLimitResult,
+  BillingLimitsActiveResult,
+  BillingLimitState,
+  EntitlementResult,
+  ResolveBillingLimitRequest,
+  UpdateBillingLimitRequest,
+} from "~/services/billingLimit.schemas";
 
 export function isCloud(): boolean {
   const acceptableHosts = [

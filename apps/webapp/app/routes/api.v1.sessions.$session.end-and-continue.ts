@@ -8,10 +8,8 @@ import { $replica, prisma } from "~/db.server";
 import { logger } from "~/services/logger.server";
 import { swapSessionRun } from "~/services/realtime/sessionRunManager.server";
 import { resolveSessionByIdOrExternalId } from "~/services/realtime/sessions.server";
-import {
-  anyResource,
-  createActionApiRoute,
-} from "~/services/routeBuilders/apiBuilder.server";
+import { anyResource, createActionApiRoute } from "~/services/routeBuilders/apiBuilder.server";
+import { runStore } from "~/v3/runStore.server";
 
 const ParamsSchema = z.object({
   session: z.string(),
@@ -66,30 +64,25 @@ const { action, loader } = createActionApiRoute(
     }
 
     if (session.closedAt) {
-      return json(
-        { error: "Cannot end-and-continue a closed session" },
-        { status: 400 }
-      );
+      return json({ error: "Cannot end-and-continue a closed session" }, { status: 400 });
     }
 
     if (session.expiresAt && session.expiresAt.getTime() < Date.now()) {
-      return json(
-        { error: "Cannot end-and-continue an expired session" },
-        { status: 400 }
-      );
+      return json({ error: "Cannot end-and-continue an expired session" }, { status: 400 });
     }
 
     // The wire `callingRunId` is a friendlyId (that's what the agent
     // SDK exposes via `ctx.run.id`). Internally `Session.currentRunId`
     // stores the TaskRun.id cuid, so resolve before handing to the
     // optimistic-claim service.
-    const callingRun = await $replica.taskRun.findFirst({
-      where: {
+    const callingRun = await runStore.findRun(
+      {
         friendlyId: body.callingRunId,
         runtimeEnvironmentId: authentication.environment.id,
       },
-      select: { id: true },
-    });
+      { select: { id: true } },
+      $replica
+    );
     if (!callingRun) {
       return json({ error: "callingRunId not found in this environment" }, { status: 404 });
     }
@@ -118,10 +111,11 @@ const { action, loader } = createActionApiRoute(
       // `$replica`. A replica miss here would silently fall back to
       // returning the internal cuid, which the public API contract
       // says is a friendlyId.
-      const run = await prisma.taskRun.findFirst({
-        where: { id: result.runId },
-        select: { friendlyId: true },
-      });
+      const run = await runStore.findRun(
+        { id: result.runId },
+        { select: { friendlyId: true } },
+        prisma
+      );
 
       const responseBody: EndAndContinueSessionResponseBody = {
         runId: run?.friendlyId ?? result.runId,

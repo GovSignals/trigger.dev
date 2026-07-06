@@ -22,6 +22,7 @@ overrides:
   jws@<3.2.3: 3.2.3
   qs@>=6.0.0 <6.15.2: ^6.15.2
   systeminformation@>=5.0.0 <5.31.0: ^5.31.0
+  std-env@>=3.10.0 <4: 3.9.0
   lodash@>=4.17 <4.18.0: ^4.18.0
   lodash-es@>=4.17 <4.18.0: ^4.18.0
   dompurify@>=3 <3.4.0: ^3.4.1
@@ -245,8 +246,8 @@ importers:
         specifier: 4.7.4
         version: 4.7.4(bufferutil@4.0.9)
       std-env:
-        specifier: ^3.8.0
-        version: 3.8.1
+        specifier: 3.9.0
+        version: 3.9.0
       zod:
         specifier: 3.25.76
         version: 3.25.76
@@ -1498,7 +1499,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
       std-env:
-        specifier: ^3.9.0
+        specifier: 3.9.0
         version: 3.9.0
       testcontainers:
         specifier: ^11.14.0
@@ -1774,8 +1775,8 @@ importers:
         specifier: 0.5.21
         version: 0.5.21
       std-env:
-        specifier: ^3.7.0
-        version: 3.7.0
+        specifier: 3.9.0
+        version: 3.9.0
       strip-ansi:
         specifier: ^7.1.0
         version: 7.1.0
@@ -1955,8 +1956,8 @@ importers:
         specifier: 4.7.5
         version: 4.7.5(bufferutil@4.0.9)(supports-color@10.0.0)
       std-env:
-        specifier: ^3.8.1
-        version: 3.8.1
+        specifier: 3.9.0
+        version: 3.9.0
       tinyexec:
         specifier: ^0.3.2
         version: 0.3.2
@@ -15469,12 +15470,6 @@ packages:
   statuses@2.0.2:
     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
     engines: {node: '>= 0.8'}
-
-  std-env@3.7.0:
-    resolution: {integrity: sha512-JPbdCEQLj1w5GilpiHAx3qJvFndqybBysA3qUOnznweH4QbNYUsW/ea8QzSrnh0vNsezMMw5bcVool8lM0gwzg==}
-
-  std-env@3.8.1:
-    resolution: {integrity: sha512-vj5lIj3Mwf9D79hBkltk5qmkFI+biIKWS2IBxEyEU3AX1tUf7AoL8nSazCOiiqQsGKIq01SClsKEzweu34uwvA==}
 
   std-env@3.9.0:
     resolution: {integrity: sha512-UGvjygr6F6tpH7o2qyqR6QYpwraIjKSdtzyBdyytFOHmPZY917kwdwLG0RbOjWOnKmnm3PeHjaoLLMie7kPLQw==}
@@ -33488,10 +33483,6 @@ snapshots:
   statuses@2.0.1: {}
 
   statuses@2.0.2: {}
-
-  std-env@3.7.0: {}
-
-  std-env@3.8.1: {}
 
   std-env@3.9.0: {}
 

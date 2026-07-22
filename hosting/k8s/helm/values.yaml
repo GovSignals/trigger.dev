@@ -172,6 +172,44 @@ webapp:
     #   mountPath: /etc/ssl/certs
     #   readOnly: true
 
+  # Extra containers added to the webapp pod (sidecars). Useful for
+  # in-pod TLS (nginx, envoy), log shippers, audit agents, etc.
+  extraContainers:
+    []
+    # - name: nginx-tls
+    #   image: nginx:alpine
+    #   ports:
+    #     - name: https-internal
+    #       containerPort: 3031
+    #   volumeMounts:
+    #     - name: nginx-config
+    #       mountPath: /etc/nginx/conf.d
+    #     - name: nginx-tls-certs
+    #       mountPath: /etc/nginx/tls
+
+  # Extra init containers added to the webapp pod, scheduled after the
+  # built-in `volume-permissions` init.
+  extraInitContainers:
+    []
+    # - name: wait-for-secrets
+    #   image: busybox
+    #   command: [...]
+
+  # Container-level securityContext applied to the built-in
+  # `volume-permissions` init container. When unset, defaults to
+  # `runAsUser: 1000`. Set this to enforce stricter pod-security
+  # admission (e.g. FIPS / FedRAMP / Pod Security Standards "restricted":
+  # `runAsNonRoot: true`, `allowPrivilegeEscalation: false`,
+  # `capabilities.drop: [ALL]`, `seccompProfile.type: RuntimeDefault`).
+  initContainers:
+    securityContext: {}
+
+  # Container-level securityContext applied to the built-in `token-syncer`
+  # sidecar. Same shape + intent as `webapp.initContainers.securityContext`.
+  # Defaults to `{ runAsUser: 1000, runAsNonRoot: true }` when unset.
+  sidecarContainers:
+    securityContext: {}
+
   # ServiceMonitor for Prometheus monitoring
   serviceMonitor:
     enabled: false
@@ -534,6 +572,27 @@ electric:
     # - name: CUSTOM_VAR
     #   value: "custom-value"
 
+  # Extra volumes added to the Electric pod. Use cases include providing
+  # the `/app/persistent` mount Electric needs at runtime (e.g. as an
+  # emptyDir or PVC), or mounting an enterprise CA bundle.
+  extraVolumes:
+    []
+    # - name: persistent
+    #   emptyDir: {}
+    # - name: ca-bundle
+    #   configMap:
+    #     name: enterprise-ca-bundle
+
+  # Extra volume mounts added to the Electric container. Pair with the
+  # corresponding entries in `extraVolumes`.
+  extraVolumeMounts:
+    []
+    # - name: persistent
+    #   mountPath: /app/persistent
+    # - name: ca-bundle
+    #   mountPath: /etc/ssl/enterprise-ca
+    #   readOnly: true
+
 # ClickHouse configuration
 # Subchart: https://github.com/bitnami/charts/tree/main/bitnami/clickhouse
 clickhouse:
@@ -550,7 +609,16 @@ clickhouse:
   # Bitnami ClickHouse chart configuration (when deploy: true)
   auth:
     username: "default"
-    password: "password"
+    password: "password" # Optional - ignored if existingSecret is set
+    #
+    # Secure credential management. When set, the chart resolves
+    # CLICKHOUSE_PASSWORD from this Secret (via Kubernetes' `$(VAR)` env
+    # substitution in the rendered URL) instead of baking the literal
+    # `password` above into the URL helper. The Bitnami ClickHouse
+    # subchart also reads the same fields, so the running ClickHouse
+    # pod and the webapp agree on the password.
+    existingSecret: "" # Name of existing secret containing password
+    existingSecretKey: "admin-password" # Key in existing secret containing password
 
   # Single-node configuration (disable clustering for dev/test)
   keeper:

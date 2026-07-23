@@ -10,7 +10,6 @@ import {
 } from "@heroicons/react/20/solid";
 import type { Prisma } from "@trigger.dev/database";
 import { z } from "zod";
-import { logger } from "~/services/logger.server";
 import { cn } from "~/utils/cn";
 
 export const AvatarType = z.enum(["icon", "letters", "image"]);
@@ -45,7 +44,7 @@ export function parseAvatar(json: Prisma.JsonValue, defaultAvatar: Avatar): Avat
   const parsed = AvatarData.safeParse(json);
 
   if (!parsed.success) {
-    logger.error("Invalid org avatar", { json, error: parsed.error });
+    console.error("Invalid org avatar", { json, error: parsed.error });
     return defaultAvatar;
   }
 
@@ -146,7 +145,7 @@ function AvatarLetters({
       <span
         className={cn(
           "relative grid place-items-center overflow-hidden rounded-[10%] font-semibold",
-          includePadding ? "size-[80%]" : "size-[100%]"
+          includePadding ? "size-[80%]" : "size-full"
         )}
         style={style}
       >
@@ -177,7 +176,7 @@ function AvatarIcon({
   const IconComponent = avatarIcons[avatar.name];
   return (
     <span className="grid aspect-square place-items-center" style={styleFromSize(size)}>
-      <IconComponent className={includePadding ? "size-[80%]" : "size-[100%]"} style={style} />
+      <IconComponent className={includePadding ? "size-[80%]" : "size-full"} style={style} />
     </span>
   );
 }

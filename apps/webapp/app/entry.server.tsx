@@ -7,7 +7,6 @@ import { parseAcceptLanguage } from "intl-parse-accept-language";
 import isbot from "isbot";
 import { renderToPipeableStream } from "react-dom/server";
 import { PassThrough } from "stream";
-import * as Worker from "~/services/worker.server";
 import { initMollifierDrainerWorker } from "~/v3/mollifierDrainerWorker.server";
 import { initMollifierStaleSweepWorker } from "~/v3/mollifierStaleSweepWorker.server";
 import { initBillingLimitWorker } from "~/v3/billingLimitWorker.server";
@@ -15,11 +14,10 @@ import { bootstrap } from "./bootstrap";
 import { LocaleContextProvider } from "./components/primitives/LocaleProvider";
 import type { OperatingSystemPlatform } from "./components/primitives/OperatingSystemProvider";
 import { OperatingSystemContextProvider } from "./components/primitives/OperatingSystemProvider";
-import { Prisma } from "./db.server";
+import { assertRunOpsSplitSentinel, Prisma } from "./db.server";
 import { env } from "./env.server";
 import { eventLoopMonitor } from "./eventLoopMonitor.server";
 import { logger } from "./services/logger.server";
-import { resourceMonitor } from "./services/resourceMonitor.server";
 import { singleton } from "./utils/singleton";
 import { remoteBuildsEnabled } from "./v3/remoteImageBuilder.server";
 import {
@@ -55,6 +53,12 @@ export default function handleRequest(
   remixContext: EntryContext
 ) {
   const url = new URL(request.url);
+
+  // Stale documents reference /build asset hashes that 404 after a deploy —
+  // always revalidate HTML. Route-set headers win.
+  if (!responseHeaders.has("Cache-Control")) {
+    responseHeaders.set("Cache-Control", "no-cache");
+  }
 
   if (url.pathname.startsWith("/login")) {
     responseHeaders.set("X-Frame-Options", "SAMEORIGIN");
@@ -227,10 +231,6 @@ export const handleError = wrapHandleErrorWithSentry((error, { request }) => {
   }
 });
 
-Worker.init().catch((error) => {
-  logError(error);
-});
-
 initMollifierDrainerWorker();
 initMollifierStaleSweepWorker();
 initBillingLimitWorker();
@@ -241,10 +241,6 @@ bootstrap().catch((error) => {
 
 function logError(error: unknown, request?: Request) {
   console.error(error);
-
-  if (error instanceof Error && error.message.startsWith("There are locked jobs present")) {
-    console.log("⚠️  graphile-worker migration issue detected!");
-  }
 }
 
 process.on("uncaughtException", (error, origin) => {
@@ -271,6 +267,17 @@ process.on("uncaughtException", (error, origin) => {
   process.exit(1);
 });
 
+// Boot-time run-ops split interlock. Async, so it runs as a
+// fire-and-forget at startup; a flag-on-but-sentinel-fails misconfig crashes
+// the process loudly before any run-ops routing is wired.
+singleton("AssertRunOpsSplitSentinel", () => {
+  assertRunOpsSplitSentinel().catch((error) => {
+    logger.error("Run-ops split sentinel assertion failed; refusing to start", { error });
+    process.exit(1);
+  });
+  return true;
+});
+
 singleton("RunEngineEventBusHandlers", registerRunEngineEventBusHandlers);
 singleton("SetupBatchQueueCallbacks", setupBatchQueueCallbacks);
 // Attach the realtime run-changed publish delegations to the engine event bus.
@@ -293,6 +300,7 @@ singleton("SentryTenantContextProcessor", () => {
 
 export { apiRateLimiter } from "./services/apiRateLimit.server";
 export { engineRateLimiter } from "./services/engineRateLimit.server";
+export { otlpRateLimiter } from "./services/otlpRateLimit.server";
 export { runWithHttpContext } from "./services/httpAsyncStorage.server";
 export { tenantContextMiddleware } from "./services/tenantContextResolver.server";
 export { socketIo } from "./v3/handleSocketIo.server";
@@ -306,8 +314,4 @@ if (remoteBuildsEnabled()) {
   console.log("🏗️  Remote builds enabled");
 } else {
   console.log("🏗️  Local builds enabled");
-}
-
-if (env.RESOURCE_MONITOR_ENABLED === "1") {
-  resourceMonitor.startMonitoring(1000);
 }

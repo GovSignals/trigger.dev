@@ -6,12 +6,12 @@ import {
 } from "@trigger.dev/core/v3";
 import { WaitpointId } from "@trigger.dev/core/v3/isomorphic";
 import { z } from "zod";
-import { $replica } from "~/db.server";
 import { env } from "~/env.server";
 import { logger } from "~/services/logger.server";
 import { processWaitpointCompletionPacket } from "~/runEngine/concerns/waitpointCompletionPacket.server";
 import { createActionApiRoute } from "~/services/routeBuilders/apiBuilder.server";
 import { engine } from "~/v3/runEngine.server";
+import { runStore } from "~/v3/runStore.server";
 
 const { action, loader } = createActionApiRoute(
   {
@@ -33,12 +33,24 @@ const { action, loader } = createActionApiRoute(
 
     try {
       //check permissions
-      const waitpoint = await $replica.waitpoint.findFirst({
+      // The store routes by the waitpointId's residency (id shape) and probes both stores, so a
+      // standalone token and a run-owned co-located waitpoint both resolve off the owning replica.
+      let waitpoint = await runStore.findWaitpoint({
         where: {
           id: waitpointId,
           environmentId: authentication.environment.id,
         },
       });
+
+      if (!waitpoint) {
+        // Read-your-writes: a token completed right after mint may not have replicated yet.
+        waitpoint = await runStore.findWaitpointOnPrimary({
+          where: {
+            id: waitpointId,
+            environmentId: authentication.environment.id,
+          },
+        });
+      }
 
       if (!waitpoint) {
         throw json({ error: "Waitpoint not found" }, { status: 404 });

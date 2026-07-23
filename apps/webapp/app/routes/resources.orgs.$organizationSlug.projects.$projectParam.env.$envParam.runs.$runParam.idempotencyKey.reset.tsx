@@ -12,36 +12,30 @@ export const action: ActionFunction = async ({ request, params }) => {
   const { projectParam, organizationSlug, envParam, runParam } = v3RunParamsSchema.parse(params);
 
   try {
-    const taskRun = await runStore.findRun(
-      {
-        friendlyId: runParam,
-        project: {
-          slug: projectParam,
-          organization: {
-            slug: organizationSlug,
-            members: {
-              some: {
-                userId,
-              },
-            },
-          },
-        },
-        runtimeEnvironment: {
-          slug: envParam,
-        },
-      },
-      {
-        select: {
-          id: true,
-          idempotencyKey: true,
-          taskIdentifier: true,
-          runtimeEnvironmentId: true,
-        },
-      },
-      prisma
-    );
+    const resetSelect = {
+      id: true,
+      idempotencyKey: true,
+      taskIdentifier: true,
+      projectId: true,
+      runtimeEnvironmentId: true,
+    };
+    let taskRun = await runStore.findRun({ friendlyId: runParam }, { select: resetSelect });
+    if (!taskRun) {
+      // Read-your-writes: a just-created run may not have replicated. Re-read the owning primary
+      // before 404ing — this null gates the reset mutation below (mirrors cancel/replay).
+      taskRun = await runStore.findRunOnPrimary({ friendlyId: runParam }, { select: resetSelect });
+    }
 
     if (!taskRun) {
+      return jsonWithErrorMessage({}, request, "Run not found");
+    }
+
+    const authorizedProject = await prisma.project.findFirst({
+      where: { id: taskRun.projectId, organization: { members: { some: { userId } } } },
+      select: { id: true },
+    });
+
+    if (!authorizedProject) {
       return jsonWithErrorMessage({}, request, "Run not found");
     }
 
@@ -49,7 +43,7 @@ export const action: ActionFunction = async ({ request, params }) => {
       return jsonWithErrorMessage({}, request, "This run does not have an idempotency key");
     }
 
-    const environment = await prisma.runtimeEnvironment.findUnique({
+    const environment = await prisma.runtimeEnvironment.findFirst({
       where: {
         id: taskRun.runtimeEnvironmentId,
       },
@@ -64,6 +58,14 @@ export const action: ActionFunction = async ({ request, params }) => {
 
     if (!environment) {
       return jsonWithErrorMessage({}, request, "Environment not found");
+    }
+
+    if (
+      environment.slug !== envParam ||
+      environment.project.slug !== projectParam ||
+      environment.project.organization.slug !== organizationSlug
+    ) {
+      return jsonWithErrorMessage({}, request, "Run not found");
     }
 
     const service = new ResetIdempotencyKeyService();

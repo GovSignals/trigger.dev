@@ -304,7 +304,7 @@ export function DeploymentsNoneDev() {
           organization={organization}
           project={project}
           environment={environment}
-          className="w-fit border border-charcoal-600 bg-secondary hover:border-charcoal-550 hover:bg-charcoal-600"
+          className="w-fit border border-border-bright bg-secondary hover:border-border-brighter hover:bg-surface-control"
         />
       </StepContentContainer>
     </>
@@ -748,11 +748,7 @@ export function PromptsNone() {
       iconClassName="text-aiPrompts"
       panelClassName="max-w-lg"
       accessory={
-        <LinkButton
-          to={docsPath("prompt-management")}
-          variant="docs/small"
-          LeadingIcon={BookOpenIcon}
-        >
+        <LinkButton to={docsPath("ai/prompts")} variant="docs/small" LeadingIcon={BookOpenIcon}>
           Prompts docs
         </LinkButton>
       }

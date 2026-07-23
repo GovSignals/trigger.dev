@@ -2,12 +2,13 @@ import { type ActionFunctionArgs, json } from "@remix-run/server-runtime";
 import { type CompleteWaitpointTokenResponseBody, stringifyIO } from "@trigger.dev/core/v3";
 import { WaitpointId } from "@trigger.dev/core/v3/isomorphic";
 import { z } from "zod";
-import { $replica } from "~/db.server";
 import { env } from "~/env.server";
 import { processWaitpointCompletionPacket } from "~/runEngine/concerns/waitpointCompletionPacket.server";
 import { verifyHttpCallbackHash } from "~/services/httpCallback.server";
 import { logger } from "~/services/logger.server";
+import { controlPlaneResolver } from "~/v3/runOpsMigration/controlPlaneResolver.server";
 import { engine } from "~/v3/runEngine.server";
+import { runStore } from "~/v3/runStore.server";
 
 const paramsSchema = z.object({
   waitpointFriendlyId: z.string(),
@@ -32,28 +33,32 @@ export async function action({ request, params }: ActionFunctionArgs) {
   const waitpointId = WaitpointId.toId(waitpointFriendlyId);
 
   try {
-    const waitpoint = await $replica.waitpoint.findFirst({
+    // Resolve wherever the waitpoint resides. The store routes by the waitpoint id's residency
+    // (id-shape) and probes both run-ops DBs, so a token on either store resolves; the env is
+    // resolved below from the row via the control-plane resolver.
+    let waitpoint = await runStore.findWaitpoint({
       where: {
         id: waitpointId,
       },
-      include: {
-        environment: {
-          include: {
-            project: true,
-            organization: true,
-            orgMember: true,
-            parentEnvironment: {
-              select: {
-                id: true,
-                apiKey: true,
-              },
-            },
-          },
-        },
-      },
+      select: { id: true, status: true, environmentId: true },
     });
 
     if (!waitpoint) {
+      // Read-your-writes: a token whose callback fires right after mint may not have replicated
+      // yet. Re-read the owning primary before 404ing (mirrors complete.ts's primary fallback).
+      waitpoint = await runStore.findWaitpointOnPrimary({
+        where: { id: waitpointId },
+        select: { id: true, status: true, environmentId: true },
+      });
+    }
+
+    if (!waitpoint) {
+      return json({ error: "Waitpoint not found" }, { status: 404 });
+    }
+
+    const environment = await controlPlaneResolver.resolveAuthenticatedEnv(waitpoint.environmentId);
+
+    if (!environment) {
       return json({ error: "Waitpoint not found" }, { status: 404 });
     }
 
@@ -61,7 +66,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
       !verifyHttpCallbackHash(
         waitpoint.id,
         hash,
-        waitpoint.environment.parentEnvironment?.apiKey ?? waitpoint.environment.apiKey
+        environment.parentEnvironment?.apiKey ?? environment.apiKey
       )
     ) {
       return json({ error: "Invalid URL, hash doesn't match" }, { status: 401 });
@@ -79,7 +84,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const stringifiedData = await stringifyIO(body);
     const finalData = await processWaitpointCompletionPacket(
       stringifiedData,
-      waitpoint.environment,
+      environment,
       `${WaitpointId.toFriendlyId(waitpointId)}/http-callback`
     );
 

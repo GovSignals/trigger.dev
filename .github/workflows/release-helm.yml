@@ -23,7 +23,7 @@ env:
 
 jobs:
   lint-and-test:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: warp-ubuntu-latest-x64-2x
     permissions:
       contents: read
     steps:
@@ -47,12 +47,14 @@ jobs:
 
       - name: Lint Helm Chart
         run: |
-          helm lint ./hosting/k8s/helm/
+          helm lint ./hosting/k8s/helm/ \
+            --values ./hosting/k8s/helm/ci/lint-values.yaml
 
       - name: Render templates
         run: |
           helm template test-release ./hosting/k8s/helm/ \
             --values ./hosting/k8s/helm/values.yaml \
+            --values ./hosting/k8s/helm/ci/lint-values.yaml \
             --output-dir ./helm-output
 
       - name: Validate manifests
@@ -68,7 +70,7 @@ jobs:
     # on the owner's charts namespace. Defaults to enabled; the lint-and-test
     # job above always runs regardless.
     if: ${{ vars.ENABLE_HELM_PRERELEASE != 'false' }}
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: warp-ubuntu-latest-x64-2x
     permissions:
       contents: write # for gh-release
       packages: write

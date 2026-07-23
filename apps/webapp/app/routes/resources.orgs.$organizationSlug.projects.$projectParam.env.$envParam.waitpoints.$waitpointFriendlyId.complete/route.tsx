@@ -16,6 +16,7 @@ import { SpinnerWhite } from "~/components/primitives/Spinner";
 import { InfoIconTooltip } from "~/components/primitives/Tooltip";
 import { LiveCountdown } from "~/components/runs/v3/LiveTimer";
 import { $replica } from "~/db.server";
+import { runStore } from "~/v3/runStore.server";
 import { env } from "~/env.server";
 import { useEnvironment } from "~/hooks/useEnvironment";
 import { useOrganization } from "~/hooks/useOrganizations";
@@ -80,7 +81,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     const waitpointId = WaitpointId.toId(waitpointFriendlyId);
 
-    const waitpoint = await $replica.waitpoint.findFirst({
+    let waitpoint = await runStore.findWaitpoint({
       select: {
         projectId: true,
         environmentId: true,
@@ -89,6 +90,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         id: waitpointId,
       },
     });
+    if (!waitpoint) {
+      // Read-your-writes: a just-minted token may not have replicated. Re-read the owning primary
+      // before the auth guard / "No waitpoint found" (mirrors the token complete/callback routes).
+      waitpoint = await runStore.findWaitpointOnPrimary({
+        select: { projectId: true, environmentId: true },
+        where: { id: waitpointId },
+      });
+    }
 
     if (waitpoint?.projectId !== project.id) {
       return redirectWithErrorMessage(
@@ -360,8 +369,8 @@ function CompleteManualWaitpointForm({ waitpoint }: { waitpoint: { id: string } 
             contentClassName="normal-case tracking-normal max-w-xs"
           />
         </div>
-        <div className="overflow-y-auto bg-charcoal-900 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-charcoal-600">
-          <div className="max-h-[70vh] min-h-40 overflow-y-auto bg-charcoal-900 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-charcoal-600">
+        <div className="overflow-y-auto bg-background-deep scrollbar-thin scrollbar-track-transparent scrollbar-thumb-surface-control">
+          <div className="max-h-[70vh] min-h-40 overflow-y-auto bg-background-deep scrollbar-thin scrollbar-track-transparent scrollbar-thumb-surface-control">
             <JSONEditor
               autoFocus
               defaultValue={currentJson.current}

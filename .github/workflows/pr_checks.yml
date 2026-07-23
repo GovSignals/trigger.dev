@@ -15,7 +15,7 @@ permissions:
 jobs:
   changes:
     name: Detect changes
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: warp-ubuntu-latest-x64-2x
     outputs:
       code: ${{ steps.code_filter.outputs.code }}
       typecheck_self: ${{ steps.filter.outputs.typecheck_self }}
@@ -56,6 +56,7 @@ jobs:
               - '.github/workflows/pr_checks.yml'
               - '.github/workflows/unit-tests-webapp.yml'
               - '.github/workflows/e2e-webapp.yml'
+              - '.github/workflows/runops-guard.yml'
               - '.configs/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
@@ -111,6 +112,11 @@ jobs:
     if: needs.changes.outputs.code == 'true' || needs.changes.outputs.typecheck_self == 'true'
     uses: ./.github/workflows/typecheck.yml
 
+  runops-guard:
+    needs: changes
+    if: needs.changes.outputs.webapp == 'true'
+    uses: ./.github/workflows/runops-guard.yml
+
   webapp:
     needs: changes
     if: needs.changes.outputs.webapp == 'true'
@@ -161,6 +167,7 @@ jobs:
       - changes
       - code-quality
       - typecheck
+      - runops-guard
       - webapp
       - e2e-webapp
       - packages
@@ -168,7 +175,7 @@ jobs:
       - e2e
       - sdk-compat
     if: always()
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: warp-ubuntu-latest-x64-2x
     steps:
       - name: Verify all checks
         run: |

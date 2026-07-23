@@ -18,6 +18,7 @@ import { GitMetadata } from "~/components/GitMetadata";
 import { VercelLink } from "~/components/integrations/VercelLink";
 import { RuntimeIcon } from "~/components/RuntimeIcon";
 import { AdminDebugTooltip } from "~/components/admin/debugTooltip";
+import { CopyableText } from "~/components/primitives/CopyableText";
 import { EnvironmentCombo } from "~/components/environments/EnvironmentLabel";
 import { Badge } from "~/components/primitives/Badge";
 import { LinkButton } from "~/components/primitives/Buttons";
@@ -283,20 +284,28 @@ export default function Page() {
           <Property.Table>
             <Property.Item>
               <Property.Label>ID</Property.Label>
-              <Property.Value>{deployment.id}</Property.Value>
+              <Property.Value>
+                <CopyableText value={deployment.id} asChild hideTooltip />
+              </Property.Value>
             </Property.Item>
             <Property.Item>
               <Property.Label>Project ID</Property.Label>
-              <Property.Value>{deployment.projectId}</Property.Value>
+              <Property.Value>
+                <CopyableText value={deployment.projectId} asChild hideTooltip />
+              </Property.Value>
             </Property.Item>
             <Property.Item>
               <Property.Label>Org ID</Property.Label>
-              <Property.Value>{deployment.organizationId}</Property.Value>
+              <Property.Value>
+                <CopyableText value={deployment.organizationId} asChild hideTooltip />
+              </Property.Value>
             </Property.Item>
             {deployment.imageReference && (
               <Property.Item>
                 <Property.Label>Image</Property.Label>
-                <Property.Value>{deployment.imageReference}</Property.Value>
+                <Property.Value>
+                  <CopyableText value={deployment.imageReference} asChild hideTooltip />
+                </Property.Value>
               </Property.Item>
             )}
             <Property.Item>
@@ -330,7 +339,7 @@ export default function Page() {
           className="pl-1"
         />
       </div>
-      <div className="overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-charcoal-600">
+      <div className="overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-surface-control">
         <div className="flex flex-col">
           <div className="p-3">
             <Property.Table>
@@ -530,7 +539,7 @@ export default function Page() {
           {deployment.errorData && <DeploymentError errorData={deployment.errorData} />}
 
           {deployment.tasks && (
-            <div className="divide-y divide-charcoal-800 overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-charcoal-600">
+            <div className="divide-y divide-background-bright overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-surface-control">
               <Table variant="bright">
                 <TableHeader>
                   <TableRow>
@@ -618,7 +627,7 @@ function LogsDisplay({
             <div
               className={cn(
                 "h-2 w-2 rounded-full",
-                errorCount > 0 ? "bg-error/80" : "bg-charcoal-600"
+                errorCount > 0 ? "bg-error/80" : "bg-surface-control"
               )}
             />
             <Paragraph variant="extra-small/dimmed/mono" className="w-[ch-10]">
@@ -629,7 +638,7 @@ function LogsDisplay({
             <div
               className={cn(
                 "h-2 w-2 rounded-full",
-                warningCount > 0 ? "bg-warning/80" : "bg-charcoal-600"
+                warningCount > 0 ? "bg-warning/80" : "bg-surface-control"
               )}
             />
             <Paragraph variant="extra-small/dimmed/mono">
@@ -692,7 +701,7 @@ function LogsDisplay({
         <div
           ref={logsContainerRef}
           className={cn(
-            "grow overflow-x-auto overflow-y-scroll font-mono text-xs transition-all duration-200 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-charcoal-600",
+            "grow overflow-x-auto overflow-y-scroll font-mono text-xs transition-all duration-200 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-surface-control",
             collapsed ? "h-16" : "h-64"
           )}
         >
@@ -716,7 +725,7 @@ function LogsDisplay({
                     "flex w-full gap-x-2.5 border-l-2 px-2.5 py-1",
                     log.level === "error" && "border-error/60 bg-error/15 hover:bg-error/25",
                     log.level === "warn" && "border-warning/60 bg-warning/20 hover:bg-warning/30",
-                    log.level === "info" && "border-transparent hover:bg-charcoal-750"
+                    log.level === "info" && "border-transparent hover:bg-background-hover"
                   )}
                 >
                   <span
@@ -745,7 +754,7 @@ function LogsDisplay({
           </div>
         </div>
         {collapsed && (
-          <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-charcoal-800/90 to-transparent" />
+          <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-8 bg-linear-to-t from-background-bright/90 to-transparent" />
         )}
       </div>
     </div>

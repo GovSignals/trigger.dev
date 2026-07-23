@@ -201,6 +201,27 @@ spec:
               value: {{ .Values.webapp.apiOrigin | quote }}
             - name: ELECTRIC_ORIGIN
               value: {{ include "trigger-v4.electric.url" . | quote }}
+            {{- if include "trigger-v4.s2.enabled" . }}
+            # Realtime streams v2, backed by S2 (bundled s2-lite or an external endpoint)
+            - name: REALTIME_STREAMS_DEFAULT_VERSION
+              value: {{ .Values.s2.defaultStreamVersion | quote }}
+            - name: REALTIME_STREAMS_S2_ENDPOINT
+              value: {{ include "trigger-v4.s2.url" . | quote }}
+            - name: REALTIME_STREAMS_S2_BASIN
+              value: {{ .Values.s2.basin | quote }}
+            - name: REALTIME_STREAMS_S2_SKIP_ACCESS_TOKENS
+              value: {{ .Values.s2.skipAccessTokens | quote }}
+            {{- if and .Values.s2.external.endpoint .Values.s2.external.existingSecret }}
+            - name: REALTIME_STREAMS_S2_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.s2.external.existingSecret }}
+                  key: {{ .Values.s2.external.existingSecretAccessTokenKey }}
+            {{- else if .Values.s2.external.accessToken }}
+            - name: REALTIME_STREAMS_S2_ACCESS_TOKEN
+              value: {{ .Values.s2.external.accessToken | quote }}
+            {{- end }}
+            {{- end }}
             {{- if include "trigger-v4.postgres.useSecretUrl" . }}
             - name: DATABASE_URL
               valueFrom:
@@ -213,6 +234,13 @@ spec:
                   name: {{ include "trigger-v4.postgres.external.secretName" . }}
                   key: {{ include "trigger-v4.postgres.external.directUrlKey" . }}
             {{- else }}
+            {{- if .Values.postgres.deploy }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "trigger-v4.datastore.secretName" . }}
+                  key: password
+            {{- end }}
             - name: DATABASE_URL
               value: {{ include "trigger-v4.postgres.connectionString" . | quote }}
             - name: DIRECT_URL
@@ -298,6 +326,16 @@ spec:
                 secretKeyRef:
                   name: {{ include "trigger-v4.secretsName" . }}
                   key: ENCRYPTION_KEY
+            - name: PROVIDER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "trigger-v4.secretsName" . }}
+                  key: PROVIDER_SECRET
+            - name: COORDINATOR_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "trigger-v4.secretsName" . }}
+                  key: COORDINATOR_SECRET
             - name: MANAGED_WORKER_SECRET
               valueFrom:
                 secretKeyRef:
@@ -404,22 +442,18 @@ spec:
             - name: INTERNAL_OTEL_METRIC_EXPORTER_INTERVAL_MS
               value: {{ .Values.webapp.observability.metrics.exporterIntervalMs | quote }}
             {{- end }}
-            {{- if .Values.clickhouse.deploy }}
-            - name: CLICKHOUSE_PASSWORD
-              {{- if .Values.clickhouse.auth.existingSecret }}
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.clickhouse.auth.existingSecret }}
-                  key: {{ .Values.clickhouse.auth.existingSecretKey | default "admin-password" }}
-              {{- else }}
-              value: {{ .Values.clickhouse.auth.password | quote }}
-              {{- end }}
-            {{- else if and .Values.clickhouse.external.host .Values.clickhouse.external.existingSecret }}
+            {{- if and (not .Values.clickhouse.deploy) .Values.clickhouse.external.host .Values.clickhouse.external.existingSecret }}
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "trigger-v4.clickhouse.external.secretName" . }}
                   key: {{ include "trigger-v4.clickhouse.external.passwordKey" . }}
+            {{- else if .Values.clickhouse.deploy }}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "trigger-v4.datastore.secretName" . }}
+                  key: clickhouse-admin-password
             {{- end }}
             - name: CLICKHOUSE_URL
               value: {{ include "trigger-v4.clickhouse.url" . | quote }}

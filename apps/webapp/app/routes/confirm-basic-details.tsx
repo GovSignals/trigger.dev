@@ -27,6 +27,7 @@ import { useUser } from "~/hooks/useUser";
 import { redirectWithSuccessMessage } from "~/models/message.server";
 import { updateUser } from "~/models/user.server";
 import { requireUserId } from "~/services/session.server";
+import { emailSchema, MAX_EMAIL_LENGTH } from "~/utils/emailValidation";
 import { rootPath } from "~/utils/pathBuilder";
 import { getVercelInstallParams } from "~/v3/vercel";
 
@@ -72,10 +73,8 @@ function createSchema(
   return z
     .object({
       name: z.string().min(3, "Your name must be at least 3 characters").max(50),
-      email: z
-        .string()
-        .email()
-        .superRefine((email, ctx) => {
+      email: emailSchema.pipe(
+        z.string().superRefine((email, ctx) => {
           if (constraints.isEmailUnique === undefined) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
@@ -93,8 +92,9 @@ function createSchema(
               });
             });
           }
-        }),
-      confirmEmail: z.string(),
+        })
+      ),
+      confirmEmail: emailSchema,
       referralSource: z.string().optional(),
       referralSourceOther: z.string().optional(),
       role: z.string().optional(),
@@ -239,11 +239,11 @@ export default function Page() {
   const shouldShowConfirm = user.email !== enteredEmail || user.email === "";
 
   return (
-    <AppContainer className="bg-charcoal-900">
+    <AppContainer className="bg-background-deep">
       <BackgroundWrapper>
         <MainCenteredContainer
           variant="onboarding"
-          className="max-w-[29rem] rounded-lg border border-grid-bright bg-background-dimmed p-5 shadow-lg"
+          className="max-w-116 rounded-lg border border-grid-bright bg-background-dimmed p-5 shadow-lg"
         >
           <Form method="post" {...getFormProps(form)}>
             <FormTitle
@@ -290,6 +290,7 @@ export default function Page() {
                 </Label>
                 <Input
                   {...getInputProps(email, { type: "email" })}
+                  maxLength={MAX_EMAIL_LENGTH}
                   defaultValue={enteredEmail}
                   onChange={(e) => {
                     setEnteredEmail(e.target.value);
@@ -306,6 +307,7 @@ export default function Page() {
                   <Label htmlFor={confirmEmail.id}>Confirm email</Label>
                   <Input
                     {...getInputProps(confirmEmail, { type: "email" })}
+                    maxLength={MAX_EMAIL_LENGTH}
                     placeholder="Your email, again"
                     icon={EnvelopeIcon}
                     spellCheck={false}
@@ -320,7 +322,7 @@ export default function Page() {
 
               {isManagedCloud && (
                 <>
-                  <div className="border-t border-charcoal-700" />
+                  <div className="border-t border-grid-bright" />
                   <InputGroup>
                     <Label className="mb-0.5" id="referral-label">
                       How did you hear about us?
@@ -384,7 +386,7 @@ export default function Page() {
                       dropdownIcon
                       icon={<UserGroupIcon className="mr-1 size-4.5 text-text-dimmed" />}
                       items={shuffledRoles}
-                      className="h-8 min-w-0 border-0 bg-charcoal-750 pl-2 text-sm text-text-dimmed ring-charcoal-600 transition hover:bg-charcoal-650 hover:text-text-dimmed hover:ring-1"
+                      className="h-8 min-w-0 border-0 bg-background-hover pl-2 text-sm text-text-dimmed ring-border-bright transition hover:bg-secondary hover:text-text-dimmed hover:ring-1"
                       text={(v) => (v ? <span className="text-text-bright">{v}</span> : undefined)}
                     >
                       {(items) =>

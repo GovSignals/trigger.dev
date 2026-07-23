@@ -52,15 +52,16 @@ export const AdditionalEnvVars = z.preprocess((val) => {
  * branching on undefined.
  *
  * `valueValidator` constrains the shape of the parsed values:
- *   - `JsonStringMap` for `Record<string, string>` (e.g. annotations, labels)
+ *   - `z.string()` for `Record<string, string>` (e.g. annotations, labels)
  *   - `JsonAny` for arbitrary nested objects (e.g. `securityContext`)
  *
  * @example
  *   KUBERNETES_WORKER_POD_ANNOTATIONS: JsonObjectEnv("KUBERNETES_WORKER_POD_ANNOTATIONS", {
- *     valueValidator: JsonStringMap,
+ *     valueValidator: z.string(),
  *   }),
  */
 export const JsonStringMap = z.record(z.string(), z.string());
+const JsonStringValue = z.string();
 export const JsonAny: z.ZodTypeAny = z.lazy(() =>
   z.union([
     z.string(),
@@ -75,16 +76,16 @@ export const JsonAny: z.ZodTypeAny = z.lazy(() =>
 type JsonObjectEnvOpts<TSchema extends z.ZodTypeAny> = {
   /**
    * Schema applied to each *value* in the parsed object. Defaults to
-   * `JsonStringMap` (string values).
+   * `z.string()`.
    */
   valueValidator?: TSchema;
 };
 
-export const JsonObjectEnv = <TSchema extends z.ZodTypeAny = typeof JsonStringMap>(
+export const JsonObjectEnv = <TSchema extends z.ZodTypeAny = typeof JsonStringValue>(
   envName: string,
   opts: JsonObjectEnvOpts<TSchema> = {}
 ) => {
-  const valueValidator = (opts.valueValidator ?? JsonStringMap) as TSchema;
+  const valueValidator = (opts.valueValidator ?? JsonStringValue) as TSchema;
 
   return z
     .string()

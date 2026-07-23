@@ -8,7 +8,9 @@ description: "Inject user messages mid-execution to steer agents between tool-ca
 
 When an AI agent is executing tool calls, users may want to send a message that **steers the agent mid-execution** — adding context, correcting course, or refining the request without waiting for the response to finish.
 
-The `pendingMessages` option enables this by injecting user messages between tool-call steps via the AI SDK's `prepareStep`. Messages that arrive during streaming are queued and injected at the next step boundary. If there are no more step boundaries (single-step response or final text generation), the message becomes the next turn automatically.
+By default (without `pendingMessages`), a message sent while the agent is responding never interrupts the in-flight response: it's buffered and processed as its own turn once the current turn completes, with multiple messages running sequentially in arrival order.
+
+The `pendingMessages` option enables steering instead, injecting user messages between tool-call steps via the AI SDK's `prepareStep`. Messages that arrive during streaming are queued and injected at the next step boundary. If there are no more step boundaries (single-step response or final text generation), the message becomes the next turn automatically.
 
 ## How it works
 
@@ -177,10 +179,14 @@ for (let turn = 0; turn < 100; turn++) {
     stopWhen: stepCountIs(15),
   });
 
-  const response = await chat.pipeAndCapture(result);
+  const { message, status, error } = await chat.pipeAndCapture(result);
   sub.off();
 
-  if (response) await conversation.addResponse(response);
+  // Keep any partial output, then branch on the outcome: pipeAndCapture no
+  // longer throws, so rethrow a real failure and don't complete a failed turn.
+  if (message) await conversation.addResponse(message);
+  if (status === "error") throw error;
+
   await chat.writeTurnComplete();
 }
 ```

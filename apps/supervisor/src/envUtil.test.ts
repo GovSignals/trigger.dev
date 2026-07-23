@@ -187,9 +187,7 @@ describe("JsonObjectEnv (flat string values, K8s-annotation shape)", () => {
 
   it("accepts multiple flat string annotations", () => {
     expect(
-      schema.parse(
-        '{"com.palantir.rubix.service/pod-cert":"{}","trigger.dev/owner":"supervisor"}'
-      )
+      schema.parse('{"com.palantir.rubix.service/pod-cert":"{}","trigger.dev/owner":"supervisor"}')
     ).toEqual({
       "com.palantir.rubix.service/pod-cert": "{}",
       "trigger.dev/owner": "supervisor",

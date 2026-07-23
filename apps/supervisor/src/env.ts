@@ -9,10 +9,22 @@ export const Env = z
     TRIGGER_WORKER_INSTANCE_NAME: z.string().default(randomUUID()),
     TRIGGER_WORKER_HEARTBEAT_INTERVAL_SECONDS: z.coerce.number().default(30),
 
+    // Opt-in, dev-only: stream this process's logs over a local telnet/TCP socket on this port.
+    SUPERVISOR_TELNET_LOGS_PORT: z.coerce.number().optional(),
+
     // Required settings
     TRIGGER_API_URL: z.string().url(),
-    TRIGGER_WORKER_TOKEN: z.string(), // accepts file:// path to read from a file
+    TRIGGER_WORKER_TOKEN: z.string().min(1), // accepts file:// path to read from a file
     MANAGED_WORKER_SECRET: z.string(),
+
+    // Deployment token: sign a token into TRIGGER_DEPLOYMENT_ID at pod creation and verify it on
+    // inbound workload calls. "disabled" = off; "log" = mint + verify + metrics only; "enforce" =
+    // also reject invalid tokens.
+    WORKLOAD_TOKEN_SECRET: z.string().optional(),
+    WORKLOAD_TOKEN_ENFORCEMENT: z.enum(["disabled", "log", "enforce"]).default("disabled"),
+    // Absolute expiry for minted deployment tokens. Deterministic (no wall-clock issued-at) so every
+    // pod of a deployment carries an identical token; bump before this date. Must outlive any run.
+    WORKLOAD_TOKEN_EXP: z.string().datetime().default("2032-01-01T00:00:00.000Z"),
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url(), // set on the runners
 
     // Workload API settings (coordinator mode) - the workload API is what the run controller connects to
@@ -168,11 +180,9 @@ export const Env = z
     // annotation values are always strings (`map[string]string` per the API
     // spec) — and `kubernetes.ts` spreads this parsed object straight into
     // the pod's `metadata.annotations` without any conversion. So each
-    // value here must be a string. The default validator on JsonObjectEnv
-    // is JsonStringMap (nested string→string map), which is the right
-    // shape for security contexts but the wrong shape for annotations:
-    // accepting nested objects here would silently pass zod validation
-    // and then get rejected by the K8s API with
+    // value here must be a string. The explicit validator documents that
+    // Kubernetes requirement; accepting nested objects would get rejected
+    // by the K8s API with
     //   "Pod in version v1 cannot be handled as a Pod: json: cannot
     //    unmarshal object into Go struct field
     //    ObjectMeta.metadata.annotations of type string"
@@ -187,9 +197,12 @@ export const Env = z
     // `{"runAsNonRoot": true, "runAsUser": 1000, "fsGroup": 1000}`.
     // OpenShift and other clusters with arbitrary-UID SCCs typically want
     // to leave this empty and let the SCC inject values.
-    KUBERNETES_WORKER_POD_SECURITY_CONTEXT: JsonObjectEnv("KUBERNETES_WORKER_POD_SECURITY_CONTEXT", {
-      valueValidator: JsonAny,
-    }),
+    KUBERNETES_WORKER_POD_SECURITY_CONTEXT: JsonObjectEnv(
+      "KUBERNETES_WORKER_POD_SECURITY_CONTEXT",
+      {
+        valueValidator: JsonAny,
+      }
+    ),
     // Container-level securityContext applied to the worker container of every
     // worker pod (V1SecurityContext shape). Default is empty `{}` (matches
     // upstream's previous behavior of not setting a container securityContext).
@@ -406,6 +419,14 @@ export const Env = z
         code: z.ZodIssueCode.custom,
         message: "TRIGGER_WORKLOAD_API_DOMAIN is required when COMPUTE_SNAPSHOTS_ENABLED is true",
         path: ["TRIGGER_WORKLOAD_API_DOMAIN"],
+      });
+    }
+    if (data.WORKLOAD_TOKEN_ENFORCEMENT !== "disabled" && !data.WORKLOAD_TOKEN_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "WORKLOAD_TOKEN_SECRET is required when WORKLOAD_TOKEN_ENFORCEMENT is not disabled",
+        path: ["WORKLOAD_TOKEN_SECRET"],
       });
     }
     if (

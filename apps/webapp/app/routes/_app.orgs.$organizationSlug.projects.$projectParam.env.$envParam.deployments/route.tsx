@@ -244,7 +244,7 @@ export default function Page() {
                                 </div>
                                 <Paragraph
                                   variant="extra-small"
-                                  className="!text-wrap text-text-dimmed"
+                                  className="text-wrap! text-text-dimmed"
                                 >
                                   {deploymentStatusDescription(status)}
                                 </Paragraph>
@@ -303,6 +303,7 @@ export default function Page() {
                               <RuntimeIcon
                                 runtime={deployment.runtime}
                                 runtimeVersion={deployment.runtimeVersion}
+                                withLabel
                               />
                             </TableCell>
                             <TableCell to={path} isSelected={isSelected}>

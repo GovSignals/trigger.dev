@@ -1,4 +1,4 @@
-ARG NODE_IMAGE=node:22.23.1-bookworm-slim@sha256:813a7480f28fdadac1f7f5c824bcdad435b5bc1322a5968bbbdef8d058f9dff4
+ARG NODE_IMAGE=node:24.18.0-bookworm-slim@sha256:39a4259b6f744868a8228742ad45aa3026f97302e5eec2fa4a38b30ca0a66e12
 
 FROM golang:1.26-alpine AS goose_builder
 RUN go install github.com/pressly/goose/v3/cmd/goose@v3.27.1
@@ -31,6 +31,8 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install
 # Generate Prisma client here where all deps are installed
 COPY --from=pruner --chown=node:node /triggerdotdev/internal-packages/database/prisma/schema.prisma /triggerdotdev/internal-packages/database/prisma/schema.prisma
 RUN pnpx prisma@6.14.0 generate --schema /triggerdotdev/internal-packages/database/prisma/schema.prisma
+COPY --from=pruner --chown=node:node /triggerdotdev/internal-packages/run-ops-database/prisma/schema.prisma /triggerdotdev/internal-packages/run-ops-database/prisma/schema.prisma
+RUN pnpx prisma@6.14.0 generate --schema /triggerdotdev/internal-packages/run-ops-database/prisma/schema.prisma
 
 ## Production deps
 FROM base AS production-deps
@@ -69,6 +71,7 @@ RUN chmod +x ./scripts/entrypoint.sh
 COPY --chown=node:node .configs/tsconfig.base.json .configs/tsconfig.base.json
 COPY --chown=node:node scripts/updateVersion.ts scripts/updateVersion.ts
 COPY --chown=node:node scripts/bundleSdkDocs.ts scripts/bundleSdkDocs.ts
+COPY --chown=node:node scripts/retry-prisma-generate.mjs scripts/retry-prisma-generate.mjs
 RUN pnpm run generate
 RUN --mount=type=secret,id=sentry_auth_token \
     SENTRY_AUTH_TOKEN=$(cat /run/secrets/sentry_auth_token) \
@@ -85,6 +88,15 @@ COPY --from=pruner --chown=node:node /triggerdotdev/out/full/ .
 COPY --from=production-deps --chown=node:node /triggerdotdev .
 # Copy generated Prisma client from dev-deps
 COPY --from=dev-deps --chown=node:node /triggerdotdev/internal-packages/database/generated ./internal-packages/database/generated
+# Run-ops Prisma client (query engine + client). Only constructed when the split is enabled,
+# but the image must carry it so a split-on deployment doesn't hit a missing query engine.
+COPY --from=dev-deps --chown=node:node /triggerdotdev/internal-packages/run-ops-database/generated ./internal-packages/run-ops-database/generated
+# These workspace packages stay external to the Vite SSR bundle, so their
+# built entry points must ship in the image (core is the sdk's runtime dep).
+COPY --from=builder --chown=node:node /triggerdotdev/internal-packages/database/dist ./internal-packages/database/dist
+COPY --from=builder --chown=node:node /triggerdotdev/internal-packages/run-ops-database/dist ./internal-packages/run-ops-database/dist
+COPY --from=builder --chown=node:node /triggerdotdev/packages/trigger-sdk/dist ./packages/trigger-sdk/dist
+COPY --from=builder --chown=node:node /triggerdotdev/packages/core/dist ./packages/core/dist
 COPY --from=builder --chown=node:node /triggerdotdev/apps/webapp/build/server.js ./apps/webapp/build/server.js
 COPY --from=builder --chown=node:node /triggerdotdev/apps/webapp/build ./apps/webapp/build
 COPY --from=builder --chown=node:node /triggerdotdev/apps/webapp/public ./apps/webapp/public

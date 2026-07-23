@@ -229,10 +229,7 @@ function createOfflineCliApiClient(): CliApiClient {
       };
     },
     async failDeployment(_deploymentId: string, body: { error: unknown }) {
-      await writeFile(
-        join(process.cwd(), "index-error.json"),
-        JSON.stringify(body, null, 2)
-      );
+      await writeFile(join(process.cwd(), "index-error.json"), JSON.stringify(body, null, 2));
       return { success: true as const, data: { id: "offline" } };
     },
   } as unknown as CliApiClient;

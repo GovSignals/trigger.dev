@@ -1,4 +1,9 @@
-import { type AnchorHTMLAttributes, type ReactNode } from "react";
+import {
+  type AnchorHTMLAttributes,
+  type ButtonHTMLAttributes,
+  forwardRef,
+  type ReactNode,
+} from "react";
 import { Link } from "@remix-run/react";
 import { motion } from "framer-motion";
 import { usePathName } from "~/hooks/usePathName";
@@ -14,6 +19,7 @@ export function SideMenuItem({
   trailingIcon,
   trailingIconClassName,
   name,
+  nameClassName,
   to,
   badge,
   target,
@@ -30,18 +36,14 @@ export function SideMenuItem({
   trailingIcon?: RenderIcon;
   trailingIconClassName?: string;
   name: string;
+  nameClassName?: string;
   to: string;
   badge?: ReactNode;
   target?: AnchorHTMLAttributes<HTMLAnchorElement>["target"];
   isCollapsed?: boolean;
   action?: ReactNode;
   disableIconHover?: boolean;
-  /**
-   * Visually indented variant — same item, just pushed further from
-   * the left edge so it reads as a child of the row above. Used for
-   * grouped sub-items like the Tasks > (Agents / Standard / Scheduled)
-   * cluster. The indent is only applied when the side menu is expanded.
-   */
+  /** Indented variant for grouped sub-items; only applied when the menu is expanded. */
   indented?: boolean;
   "data-action"?: string;
 }) {
@@ -56,11 +58,11 @@ export function SideMenuItem({
       target={target}
       data-action={dataAction}
       className={cn(
-        "group/menulink flex h-8 items-center gap-2 overflow-hidden rounded pl-[0.4375rem] pr-2",
+        "group/menulink flex h-8 items-center gap-2 overflow-hidden rounded pl-1.75 pr-2 focus-custom",
         isIndented ? "min-w-0 flex-1" : "w-full",
         isActive
           ? "bg-tertiary text-text-bright"
-          : "text-text-dimmed group-hover/menuitem:bg-charcoal-750 group-hover/menuitem:text-text-bright hover:bg-charcoal-750 hover:text-text-bright"
+          : "text-text-dimmed group-hover/menuitem:bg-background-hover group-hover/menuitem:text-text-bright hover:bg-background-hover hover:text-text-bright"
       )}
     >
       <Icon
@@ -75,32 +77,39 @@ export function SideMenuItem({
         )}
       />
       <motion.div
-        className="flex min-w-0 flex-1 items-center justify-between overflow-hidden"
+        className="min-w-0 flex-1 overflow-hidden"
         initial={false}
         animate={{
           width: isCollapsed ? 0 : "auto",
-          opacity: isCollapsed ? 0 : 1,
         }}
         transition={{ duration: 0.2, ease: "easeOut" }}
       >
-        <span className="select-none truncate text-[0.90625rem] font-medium tracking-[-0.01em]">
-          {name}
-        </span>
-        {badge && !isCollapsed && (
-          <motion.div
-            className="ml-1 flex shrink-0 items-center gap-1"
-            initial={false}
-            animate={{
-              opacity: 1,
-            }}
-            transition={{ duration: 0.15, ease: "easeOut" }}
+        {/*
+          Label opacity follows --sm-label-opacity so it fades as the menu narrows (unset
+          elsewhere → 1, fully visible).
+        */}
+        <div
+          className="flex w-full min-w-0 items-center justify-between"
+          style={{ opacity: "var(--sm-label-opacity, 1)" }}
+        >
+          <span
+            className={cn(
+              "select-none overflow-hidden whitespace-nowrap text-[0.90625rem] font-medium tracking-[-0.01em]",
+              nameClassName
+            )}
           >
-            {badge}
-          </motion.div>
-        )}
-        {trailingIcon && !isCollapsed && (
-          <Icon icon={trailingIcon} className={cn("ml-1 size-4 shrink-0", trailingIconClassName)} />
-        )}
+            {name}
+          </span>
+          {badge && !isCollapsed && (
+            <div className="ml-1 flex shrink-0 items-center gap-1">{badge}</div>
+          )}
+          {trailingIcon && !isCollapsed && (
+            <Icon
+              icon={trailingIcon}
+              className={cn("ml-1 size-4 shrink-0", trailingIconClassName)}
+            />
+          )}
+        </div>
       </motion.div>
     </Link>
   );
@@ -122,17 +131,22 @@ export function SideMenuItem({
           content={name}
           side="right"
           sideOffset={8}
-          buttonClassName="!h-8 block w-full"
+          buttonClassName="h-8! block w-full"
           hidden={!isCollapsed}
           asChild
+          tabbable
           disableHoverableContent
         />
         {!isCollapsed && (
+          // Fades with the labels via --sm-label-opacity (unset → fully visible).
           <div
             className={cn(
               "absolute bottom-1 right-1 top-1 flex aspect-square items-center justify-center rounded",
-              isActive ? "group-hover/menuitem:bg-tertiary" : "group-hover/menuitem:bg-charcoal-750"
+              isActive
+                ? "group-hover/menuitem:bg-tertiary"
+                : "group-hover/menuitem:bg-background-hover"
             )}
+            style={{ opacity: "var(--sm-label-opacity, 1)" }}
           >
             {action}
           </div>
@@ -147,10 +161,38 @@ export function SideMenuItem({
       content={name}
       side="right"
       sideOffset={8}
-      buttonClassName="!h-8 block w-full"
+      buttonClassName="h-8! block w-full"
       hidden={!isCollapsed}
       asChild
+      tabbable
       disableHoverableContent
     />
   );
 }
+
+/** Button styled to match {@link SideMenuItem}, for entries that open a dialog rather than navigate. */
+export const SideMenuItemButton = forwardRef<
+  HTMLButtonElement,
+  { icon: RenderIcon; name: string; trailing?: ReactNode } & ButtonHTMLAttributes<HTMLButtonElement>
+>(function SideMenuItemButton({ icon, name, trailing, className, type, ...props }, ref) {
+  return (
+    <button
+      ref={ref}
+      type={type ?? "button"}
+      className={cn(
+        "group/menuitem flex h-8 w-full items-center gap-2 overflow-hidden rounded pl-1.75 pr-2 text-left text-text-dimmed hover:bg-background-hover hover:text-text-bright focus-custom",
+        className
+      )}
+      {...props}
+    >
+      <Icon
+        icon={icon}
+        className="size-5 shrink-0 text-text-dimmed group-hover/menuitem:text-text-bright"
+      />
+      <span className="min-w-0 flex-1 select-none truncate text-[0.90625rem] font-medium tracking-[-0.01em]">
+        {name}
+      </span>
+      {trailing && <span className="flex shrink-0 items-center gap-1">{trailing}</span>}
+    </button>
+  );
+});

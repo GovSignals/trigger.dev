@@ -55,6 +55,7 @@ import {
 } from "~/utils/pathBuilder";
 import { EnvironmentVariablesRepository } from "~/v3/environmentVariables/environmentVariablesRepository.server";
 import { EnvironmentVariableKey } from "~/v3/environmentVariables/repository";
+import { findUnauthorizedEnvironmentId } from "~/v3/writableEnvironments";
 
 const Variable = z.object({
   key: EnvironmentVariableKey,
@@ -162,6 +163,31 @@ export const action = dashboardAction(
     });
     if (!project) {
       return json(submission.reply({ formErrors: ["Project not found"] }));
+    }
+
+    // The submitted `environmentIds` are user-supplied. Shared env types are
+    // writable by any member; a DEV env only by its owner. See
+    // findUnauthorizedEnvironmentId.
+    const submittedEnvs = await prisma.runtimeEnvironment.findMany({
+      where: {
+        projectId: project.id,
+        id: { in: submission.value.environmentIds },
+      },
+      select: { id: true, type: true, orgMember: { select: { userId: true } } },
+    });
+    const unauthorizedEnvironmentId = findUnauthorizedEnvironmentId(
+      submittedEnvs,
+      submission.value.environmentIds,
+      userId
+    );
+    if (unauthorizedEnvironmentId) {
+      return json(
+        submission.reply({
+          fieldErrors: {
+            environmentIds: ["One or more of the selected environments is not writable by you."],
+          },
+        })
+      );
     }
 
     const repository = new EnvironmentVariablesRepository(prisma);
@@ -299,7 +325,7 @@ export default function Page() {
       <DialogContent className="p-0 pt-2.5 md:max-w-2xl lg:max-w-3xl">
         <DialogHeader className="px-4">New environment variables</DialogHeader>
         <Form method="post" {...getFormProps(form)}>
-          <Fieldset className="max-h-[70vh] overflow-y-auto p-4 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-charcoal-600">
+          <Fieldset className="max-h-[70vh] overflow-y-auto p-4 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-surface-control">
             <InputGroup fullWidth>
               <Label>Environments</Label>
               {selectedBranchId ? (
@@ -356,9 +382,9 @@ export default function Page() {
                         <TooltipTrigger>
                           <TextLink
                             to={v3BillingPath(organization)}
-                            className="flex w-fit cursor-pointer items-center gap-2 rounded border border-dashed border-charcoal-600 py-2.5 pl-3 pr-4 transition hover:border-charcoal-500 hover:bg-charcoal-850"
+                            className="flex w-fit cursor-pointer items-center gap-2 rounded border border-dashed border-border-bright py-2.5 pl-3 pr-4 transition hover:border-border-brightest hover:bg-background-dimmed"
                           >
-                            <LockClosedIcon className="size-4 text-charcoal-500" />
+                            <LockClosedIcon className="size-4 text-text-faint" />
                             <EnvironmentLabel
                               environment={{ type: "STAGING" }}
                               className="text-sm"
@@ -376,9 +402,9 @@ export default function Page() {
                         <TooltipTrigger>
                           <TextLink
                             to={v3BillingPath(organization)}
-                            className="flex w-fit cursor-pointer items-center gap-2 rounded border border-dashed border-charcoal-600 py-2.5 pl-3 pr-4 transition hover:border-charcoal-500 hover:bg-charcoal-850"
+                            className="flex w-fit cursor-pointer items-center gap-2 rounded border border-dashed border-border-bright py-2.5 pl-3 pr-4 transition hover:border-border-brightest hover:bg-background-dimmed"
                           >
-                            <LockClosedIcon className="size-4 text-charcoal-500" />
+                            <LockClosedIcon className="size-4 text-text-faint" />
                             <EnvironmentLabel
                               environment={{ type: "PREVIEW" }}
                               className="text-sm"

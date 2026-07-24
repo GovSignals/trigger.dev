@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   # check-branch:
-  #   runs-on: warp-ubuntu-latest-x64-2x
+  #   runs-on: ubuntu-latest
   #   steps:
   #     - name: Fail if re2-prod-* is pushed from a non-main branch
   #       if: startsWith(github.ref_name, 're2-prod-') && github.base_ref != 'main'
@@ -44,7 +44,7 @@ jobs:
     strategy:
       matrix:
         package: [supervisor]
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: ubuntu-latest
     # Single-entry matrix, so these job outputs are unambiguous (consumed by the
     # scan-supervisor job in publish.yml).
     outputs:

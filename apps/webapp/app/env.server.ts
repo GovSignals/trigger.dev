@@ -659,6 +659,38 @@ const EnvironmentSchema = z
       ),
 
     DEPLOY_IMAGE_PLATFORM: z.string().default("linux/amd64"),
+    /**
+     * DEPLOY_IMAGE_OVERRIDE — full image reference override; bypasses
+     * auto-generation of image tags. When set, every deployment finalized
+     * by this webapp instance uses this exact image reference instead of
+     * being routed through `getDeploymentImageRef` (ECR repo creation,
+     * per-project tagging, isEcr/repoCreated detection, etc).
+     *
+     * ⚠️  WARNING: SINGLE-TENANT ONLY. ⚠️
+     *
+     * When set, every deployment finalized by this webapp instance will be
+     * wired to this image, regardless of which org / project triggered it.
+     * This is a foot-gun for any multi-tenant trigger.dev install
+     * (including Cloud) where deployments come from untrusted user code:
+     * one operator-set value silently overrides every tenant's per-project
+     * image. Only enable when BOTH of the following hold:
+     *   - You control the build pipeline producing the image (e.g. your CI
+     *     builds + pushes a single canonical tasks image per release), AND
+     *   - The install serves only your own org's projects (self-hosted,
+     *     single-tenant).
+     *
+     * For cloud / multi-tenant: leave unset. The deployment image is
+     * normally computed per-deployment from the registry config and the
+     * deploy version, which keeps tenants isolated.
+     *
+     * Empty string is treated as unset.
+     *
+     * Example: `myregistry.com/myorg/myapp:1.0.5`
+     */
+    DEPLOY_IMAGE_OVERRIDE: z
+      .string()
+      .optional()
+      .transform((v) => (v && v.length > 0 ? v : undefined)),
     DEPLOY_TIMEOUT_MS: z.coerce
       .number()
       .int()

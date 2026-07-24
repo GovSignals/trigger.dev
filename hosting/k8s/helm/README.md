@@ -225,6 +225,64 @@ postgres:
         memory: 2Gi
 ```
 
+### CA bundle injection (webapp + supervisor)
+
+For environments where the webapp or supervisor needs to validate TLS against an internal/private CA (e.g. a corporate proxy, an enterprise image registry, an internal trigger.dev API endpoint), mount the CA bundle into the pod via `extraVolumes` / `extraVolumeMounts` and point Node at it with `NODE_EXTRA_CA_CERTS`:
+
+```yaml
+webapp:
+  extraVolumes:
+    - name: ca-bundle
+      configMap:
+        name: enterprise-ca-bundle
+  extraVolumeMounts:
+    - name: ca-bundle
+      mountPath: /etc/ssl/enterprise-ca
+      readOnly: true
+  extraEnvVars:
+    - name: NODE_EXTRA_CA_CERTS
+      value: /etc/ssl/enterprise-ca/ca.crt
+
+supervisor:
+  extraVolumes:
+    - name: ca-bundle
+      configMap:
+        name: enterprise-ca-bundle
+  extraVolumeMounts:
+    - name: ca-bundle
+      mountPath: /etc/ssl/enterprise-ca
+      readOnly: true
+  extraEnvVars:
+    - name: NODE_EXTRA_CA_CERTS
+      value: /etc/ssl/enterprise-ca/ca.crt
+```
+
+The supervisor `extraVolumes` / `extraVolumeMounts` keys behave identically to the webapp ones. Both render unconditionally — they don't require any other feature toggle.
+
+### Worker pod security context
+
+By default the supervisor doesn't set a `securityContext` on the worker pods it schedules — it lets the cluster's PodSecurity admission / SCC apply whatever defaults are configured. If you need to enforce explicit pod- or container-level security, set:
+
+```yaml
+supervisor:
+  extraEnvVars:
+    - name: KUBERNETES_WORKER_POD_SECURITY_CONTEXT
+      value: '{"runAsNonRoot":true,"runAsUser":1000,"fsGroup":1000}'
+    - name: KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT
+      value: '{"runAsNonRoot":true,"runAsUser":1000,"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"seccompProfile":{"type":"RuntimeDefault"}}'
+```
+
+These map directly to Kubernetes `V1PodSecurityContext` and `V1SecurityContext`. Don't set `runAsUser` on OpenShift — leave both env vars unset and let the namespace SCC inject the UID range.
+
+To pass extra annotations (e.g. for service-mesh sidecar injection) onto every worker pod:
+
+```yaml
+supervisor:
+  extraEnvVars:
+    - name: KUBERNETES_WORKER_POD_ANNOTATIONS
+      value: '{"sidecar.istio.io/inject":"false"}'
+```
+
 ## Deployment Modes
 
 ### Testing/Development

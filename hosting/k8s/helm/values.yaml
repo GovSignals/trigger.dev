@@ -177,6 +177,44 @@ webapp:
     #   mountPath: /etc/ssl/certs
     #   readOnly: true
 
+  # Extra containers added to the webapp pod (sidecars). Useful for
+  # in-pod TLS (nginx, envoy), log shippers, audit agents, etc.
+  extraContainers:
+    []
+    # - name: nginx-tls
+    #   image: nginx:alpine
+    #   ports:
+    #     - name: https-internal
+    #       containerPort: 3031
+    #   volumeMounts:
+    #     - name: nginx-config
+    #       mountPath: /etc/nginx/conf.d
+    #     - name: nginx-tls-certs
+    #       mountPath: /etc/nginx/tls
+
+  # Extra init containers added to the webapp pod, scheduled after the
+  # built-in `volume-permissions` init.
+  extraInitContainers:
+    []
+    # - name: wait-for-secrets
+    #   image: busybox
+    #   command: [...]
+
+  # Container-level securityContext applied to the built-in
+  # `volume-permissions` init container. When unset, defaults to
+  # `runAsUser: 1000`. Set this to enforce stricter pod-security
+  # admission (e.g. FIPS / FedRAMP / Pod Security Standards "restricted":
+  # `runAsNonRoot: true`, `allowPrivilegeEscalation: false`,
+  # `capabilities.drop: [ALL]`, `seccompProfile.type: RuntimeDefault`).
+  initContainers:
+    securityContext: {}
+
+  # Container-level securityContext applied to the built-in `token-syncer`
+  # sidecar. Same shape + intent as `webapp.initContainers.securityContext`.
+  # Defaults to `{ runAsUser: 1000, runAsNonRoot: true }` when unset.
+  sidecarContainers:
+    securityContext: {}
+
   # ServiceMonitor for Prometheus monitoring
   serviceMonitor:
     enabled: false
@@ -296,6 +334,8 @@ supervisor:
       forceEnabled: true
       namespace: "" # Default: uses release namespace
       workerNodetypeLabel: "" # When set, runs will only be scheduled on nodes with "nodetype=<label>"
+      workerServiceAccount: "" # Service account name for worker pods. Empty = use namespace's "default" SA. Set to e.g. "trigger-worker" to pin a dedicated SA.
+      workerAutomountServiceAccountToken: false # Whether to mount the SA token in worker pods. Keep false unless pods need K8s API access.
       ephemeralStorageSizeLimit: "" # Default: 10Gi
       ephemeralStorageSizeRequest: "" # Default: 2Gi´
     podCleaner:
@@ -340,6 +380,44 @@ supervisor:
     []
     # - name: CUSTOM_VAR
     #   value: "custom-value"
+
+  # Extra volumes added to the Supervisor pod.
+  #
+  # Mirrors the `webapp.extraVolumes` pattern. The most common use case is
+  # mounting an enterprise CA bundle into the supervisor so it can validate
+  # TLS connections to the trigger.dev webapp, an internal image registry,
+  # or any other service the supervisor calls. Pair with a matching
+  # `extraVolumeMounts` entry below and a `NODE_EXTRA_CA_CERTS` env var in
+  # `supervisor.extraEnvVars`.
+  extraVolumes:
+    []
+    # - name: config-volume
+    #   configMap:
+    #     name: my-config
+    #
+    # Example: enterprise CA bundle ConfigMap
+    # - name: ca-bundle
+    #   configMap:
+    #     name: enterprise-ca-bundle
+    #     items:
+    #       - key: ca.crt
+    #         path: ca.crt
+
+  # Extra volume mounts added to the Supervisor container.
+  extraVolumeMounts:
+    []
+    # - name: config-volume
+    #   mountPath: /etc/config
+    #   readOnly: true
+    #
+    # Example: enterprise CA bundle mount.
+    # Combine with:
+    #   supervisor.extraEnvVars:
+    #     - name: NODE_EXTRA_CA_CERTS
+    #       value: /etc/ssl/enterprise-ca/ca.crt
+    # - name: ca-bundle
+    #   mountPath: /etc/ssl/enterprise-ca
+    #   readOnly: true
 
   # ServiceMonitor for Prometheus monitoring
   serviceMonitor:
@@ -510,6 +588,20 @@ electric:
     type: ClusterIP
     port: 3000
     targetPort: 3000
+    # Name of the Service port. Override when an external routing layer
+    # (e.g. a service-mesh ingress or platform LB) needs to address the
+    # port by a specific name instead of the chart default "http".
+    name: ""
+    # Optional override of the Service's `ports[].targetPort` field
+    # only. Defaults to `webapp.service.targetPort` (same value used
+    # for the webapp container's listening port), which matches
+    # historical behavior — Service routes directly to the webapp
+    # container. Override when the Service should route to a sidecar
+    # container's named port instead (e.g. an in-pod TLS terminator or
+    # auth proxy listening on a different containerPort than the
+    # webapp itself).
+    servicePortTargetPort: ""
+    annotations: {}
   resources: {}
 
   # Health probe configuration
@@ -545,6 +637,22 @@ electric:
     # - name: CUSTOM_VAR
     #   value: "custom-value"
 
+  # Extra volumes added to the Electric pod. The Electric container always
+  # has an emptyDir at /app/persistent regardless of this list — that's
+  # required by the Electric runtime. Use `extraVolumes` for things like
+  # an enterprise CA bundle ConfigMap.
+  extraVolumes:
+    []
+    # - name: ca-bundle
+    #   configMap:
+    #     name: enterprise-ca-bundle
+
+  # Extra volume mounts added to the Electric container.
+  extraVolumeMounts:
+    []
+    # - name: ca-bundle
+    #   mountPath: /etc/ssl/enterprise-ca
+    #   readOnly: true
 # S2 (realtime streams v2)
 # s2-lite is the open-source, self-hostable S2 server (https://s2.dev). It backs
 # realtime streams v2, which power AI-agent token streaming and run streams. When
@@ -750,6 +858,14 @@ s3:
     accessKeyId: "" # Required when s3.deploy=false — no default. Set explicitly or use existingSecret.
     secretAccessKey: "" # Required when s3.deploy=false — no default. Set explicitly or use existingSecret.
     #
+    # IAM-based authentication (for AWS S3 with IRSA / GCP Workload Identity).
+    # When true, the webapp pod skips the OBJECT_STORE_ACCESS_KEY_ID /
+    # OBJECT_STORE_SECRET_ACCESS_KEY env vars entirely so the AWS SDK can
+    # fall back to its credential-provider chain (instance metadata,
+    # web-identity-token file, etc.). Pair with a ServiceAccount
+    # `eks.amazonaws.com/role-arn` annotation on `webapp.serviceAccount`.
+    useIam: false
+    #
     # Secure credential management
     existingSecret: "" # Name of existing secret containing S3 credentials
     existingSecretAccessKeyIdKey: "access-key-id" # Key in existing secret containing access key ID
@@ -897,6 +1013,22 @@ registry:
       #     - registry.local
 
 # Shared persistent volumes
+# Optional nginx sidecar configuration. Default empty — chart consumers
+# that ship an in-pod nginx (e.g. for TLS termination + auth proxy) wire
+# this via extraContainers/extraVolumes; this block exists so other
+# templates can safely reference `.Values.nginx.*` with chart defaults.
+nginx:
+  # When true (and `nginx.tls.enabled: true`), templates like supervisor
+  # route to `<fullname>-webapp-internal:<nginx.internalPort>` over TLS
+  # instead of the public webapp Service. The chart consumer is
+  # responsible for actually rendering the in-pod sidecar + the
+  # `<fullname>-webapp-internal` Service (see `extraContainers` /
+  # `extraVolumes` on `webapp`).
+  enabled: false
+  tls:
+    enabled: false
+  internalPort: 3031
+
 persistence:
   # This is used for the worker token file
   shared:

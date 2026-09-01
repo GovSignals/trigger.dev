@@ -55,4 +55,8 @@ export interface WorkloadManagerCreateOptions {
   annotations?: RunAnnotations;
   // private networking
   hasPrivateLink?: boolean;
+  // Run-scoped credentials minted by the configured credential provider, injected
+  // as env vars into this single worker pod/container. Absent when no provider is
+  // configured. See services/runCredentialProvider.ts.
+  runCredentialEnv?: Record<string, string>;
 }

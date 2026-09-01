@@ -190,6 +190,12 @@ export class ComputeWorkloadManager implements WorkloadManager {
       Object.assign(envVars, this.opts.additionalEnvVars);
     }
 
+    // Run-scoped credentials minted for this single workload. Last so they
+    // can't be shadowed by earlier entries.
+    if (opts.runCredentialEnv) {
+      Object.assign(envVars, opts.runCredentialEnv);
+    }
+
     // Strip image digest - resolve by tag, not digest
     const imageRef = stripImageDigest(opts.image);
 

@@ -220,6 +220,28 @@ export const Env = z
     // RBAC. Use case: keep task-time secrets (DB URLs, API keys) in
     // Kubernetes rather than syncing them through the trigger.dev webapp.
     KUBERNETES_WORKER_ENV_FROM_SECRET: z.string().optional(),
+
+    // --- Per-run credential provider (manager-agnostic: kubernetes/docker/compute) ---
+    // When RUN_CREDENTIAL_PROVIDER_URL is set, the supervisor calls this HTTP
+    // endpoint once per run, just before creating the worker, and injects the
+    // returned env vars into that single pod/container. The worker therefore
+    // boots holding only a short-lived, run-scoped credential minted by a
+    // trusted service — never an ambient/admin credential baked into the image.
+    // The endpoint receives the run context the supervisor has (org/project/env/
+    // run/deployment ids + annotations) and returns { env, bindsPodToRun }.
+    // Unset = feature off; behavior is byte-identical to not having it.
+    RUN_CREDENTIAL_PROVIDER_URL: z.string().url().optional(),
+    // Bearer token the supervisor presents to the provider to authenticate
+    // itself. This is the supervisor's OWN credential and is never forwarded to
+    // the worker pod.
+    RUN_CREDENTIAL_PROVIDER_TOKEN: z.string().optional(),
+    // Timeout (ms) for the mint call.
+    RUN_CREDENTIAL_PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+    // Fail-open (true) creates the pod without run credentials when minting
+    // fails; the safe default (false) fails closed — a mint failure aborts pod
+    // creation so a worker never starts with missing/ambient credentials.
+    RUN_CREDENTIAL_PROVIDER_FAIL_OPEN: BoolEnv.default(false),
+
     KUBERNETES_IMAGE_PULL_SECRETS: z.string().optional(), // csv
     KUBERNETES_EPHEMERAL_STORAGE_SIZE_LIMIT: z.string().default("10Gi"),
     KUBERNETES_EPHEMERAL_STORAGE_SIZE_REQUEST: z.string().default("2Gi"),

@@ -28,6 +28,10 @@ import { PodCleaner } from "./services/podCleaner.js";
 import { FailedPodHandler } from "./services/failedPodHandler.js";
 import { getWorkerToken } from "./workerToken.js";
 import { mintDeploymentToken } from "./workloadToken.js";
+import {
+  mintRunCredentials,
+  runCredentialProviderEnabled,
+} from "./services/runCredentialProvider.js";
 import { OtlpTraceService } from "./services/otlpTraceService.js";
 import {
   WarmStartVerificationService,
@@ -456,7 +460,16 @@ class ManagedSupervisor {
               });
             }
 
-            if (checkpoint) {
+            if (checkpoint && runCredentialProviderEnabled) {
+              // A restored pod was created for an earlier run and carries that
+              // run's minted credentials. Skip restore so credential-bound runs
+              // always cold-start with their own scoped credential.
+              this.logger.debug("Skipping checkpoint restore for credential-bound run", {
+                runId: message.run.id,
+              });
+            }
+
+            if (checkpoint && !runCredentialProviderEnabled) {
               setExtra(fromContext(), "path_taken", "restore");
               this.logger.debug("Restoring run", { runId: message.run.id });
 
@@ -542,7 +555,11 @@ class ManagedSupervisor {
             this.logger.debug("Scheduling run", { runId: message.run.id });
 
             const warmStartStart = performance.now();
-            const didWarmStart = await this.tryWarmStart(message, traceparent);
+            // Credential-bound runs must never warm-start: a warm pod was created
+            // for a different run and holds that run's minted credentials.
+            const didWarmStart = runCredentialProviderEnabled
+              ? false
+              : await this.tryWarmStart(message, traceparent);
             const warmStartCheckMs = Math.round(performance.now() - warmStartStart);
             recordPhaseSince("warm_start", warmStartStart, undefined);
             setExtra(fromContext(), "did_warm_start", didWarmStart);
@@ -636,6 +653,27 @@ class ManagedSupervisor {
         project_id: message.project.id,
       });
 
+      // Mint run-scoped credentials for this single worker. Failing closed (the
+      // default) throws here, so the surrounding try/catch aborts pod creation
+      // and no worker starts without its scoped credential.
+      let runCredentialEnv: Record<string, string> | undefined;
+      if (runCredentialProviderEnabled) {
+        const credentials = await mintRunCredentials({
+          runId: message.run.id,
+          runFriendlyId: message.run.friendlyId,
+          isTest: message.run.isTest,
+          isReplay: message.run.isReplay,
+          orgId: message.organization.id,
+          projectId: message.project.id,
+          envId: message.environment.id,
+          envType: message.environment.type,
+          deploymentFriendlyId: message.deployment.friendlyId,
+          deploymentVersion: message.backgroundWorker.version,
+          annotations: message.run.annotations as Record<string, unknown> | undefined,
+        });
+        runCredentialEnv = credentials?.env;
+      }
+
       await this.workloadManager.create({
         dequeuedAt: message.dequeuedAt,
         dequeueResponseMs: timings.dequeueResponseMs,
@@ -661,6 +699,7 @@ class ManagedSupervisor {
         traceContext: message.run.traceContext,
         annotations: message.run.annotations,
         hasPrivateLink: message.organization.hasPrivateLink,
+        runCredentialEnv,
       });
       recordPhaseSince("workload_create", createStart, undefined);
       workloadCreateDuration.observe(

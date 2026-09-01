@@ -282,6 +282,14 @@ export class KubernetesWorkloadManager implements WorkloadManager {
                         value: value,
                       }))
                     : []),
+                  // Run-scoped credentials minted for this single pod. Last so
+                  // they can't be shadowed by earlier entries.
+                  ...(opts.runCredentialEnv
+                    ? Object.entries(opts.runCredentialEnv).map(([key, value]) => ({
+                        name: key,
+                        value: value,
+                      }))
+                    : []),
                 ],
               },
             ],

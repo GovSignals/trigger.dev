@@ -113,6 +113,14 @@ export class DockerWorkloadManager implements WorkloadManager {
       });
     }
 
+    // Run-scoped credentials minted for this single container. Last so they
+    // can't be shadowed by earlier entries.
+    if (opts.runCredentialEnv) {
+      Object.entries(opts.runCredentialEnv).forEach(([key, value]) => {
+        envVars.push(`${key}=${value}`);
+      });
+    }
+
     const hostConfig: Docker.HostConfig = {
       AutoRemove: !!this.opts.dockerAutoremove,
     };

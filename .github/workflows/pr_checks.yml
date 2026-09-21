@@ -15,7 +15,7 @@ permissions:
 jobs:
   changes:
     name: Detect changes
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.code_filter.outputs.code }}
       typecheck_self: ${{ steps.filter.outputs.typecheck_self }}
@@ -175,7 +175,7 @@ jobs:
       - e2e
       - sdk-compat
     if: always()
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: ubuntu-latest
     steps:
       - name: Verify all checks
         run: |

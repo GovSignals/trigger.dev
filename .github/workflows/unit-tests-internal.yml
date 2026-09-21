@@ -18,7 +18,7 @@ jobs:
     # (fileParallelism: false) and container-wait-bound, so 12 in-machine shard processes
     # fit comfortably in 32 vCPUs while paying the setup cost (install, prisma generate,
     # image pulls) once instead of 12 times.
-    runs-on: warp-ubuntu-latest-x64-32x
+    runs-on: ubuntu-latest
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       SHARD_TOTAL: 12

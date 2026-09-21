@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { env as stdEnv } from "std-env";
 import { z } from "zod";
-import { AdditionalEnvVars, BoolEnv } from "./envUtil.js";
+import { AdditionalEnvVars, BoolEnv, JsonAny, JsonObjectEnv } from "./envUtil.js";
 
 export const Env = z
   .object({
@@ -173,6 +173,53 @@ export const Env = z
     KUBERNETES_FORCE_ENABLED: BoolEnv.default(false),
     KUBERNETES_NAMESPACE: z.string().default("default"),
     KUBERNETES_WORKER_NODETYPE_LABEL: z.string().default("v4-worker"),
+    KUBERNETES_WORKER_SERVICE_ACCOUNT: z.string().optional(), // Service account for worker pods
+    KUBERNETES_WORKER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN: BoolEnv.default(false), // Whether to mount SA token
+    // Extra annotations to apply to every worker pod (e.g. for service mesh
+    // sidecar injection, certificate injection, scheduling hints). K8s
+    // annotation values are always strings (`map[string]string` per the API
+    // spec) — and `kubernetes.ts` spreads this parsed object straight into
+    // the pod's `metadata.annotations` without any conversion. So each
+    // value here must be a string. The explicit validator documents that
+    // Kubernetes requirement; accepting nested objects would get rejected
+    // by the K8s API with
+    //   "Pod in version v1 cannot be handled as a Pod: json: cannot
+    //    unmarshal object into Go struct field
+    //    ObjectMeta.metadata.annotations of type string"
+    // (Real failure mode hit on FedStart with
+    //  `{"com.palantir.rubix.service/pod-cert": {}}`.)
+    KUBERNETES_WORKER_POD_ANNOTATIONS: JsonObjectEnv("KUBERNETES_WORKER_POD_ANNOTATIONS", {
+      valueValidator: z.string(),
+    }),
+    // Pod-level securityContext applied to every worker pod (V1PodSecurityContext shape).
+    // Default is empty `{}`, preserving the upstream behavior of not setting
+    // a pod-level securityContext. Provide a JSON object to enforce e.g.
+    // `{"runAsNonRoot": true, "runAsUser": 1000, "fsGroup": 1000}`.
+    // OpenShift and other clusters with arbitrary-UID SCCs typically want
+    // to leave this empty and let the SCC inject values.
+    KUBERNETES_WORKER_POD_SECURITY_CONTEXT: JsonObjectEnv(
+      "KUBERNETES_WORKER_POD_SECURITY_CONTEXT",
+      {
+        valueValidator: JsonAny,
+      }
+    ),
+    // Container-level securityContext applied to the worker container of every
+    // worker pod (V1SecurityContext shape). Default is empty `{}` (matches
+    // upstream's previous behavior of not setting a container securityContext).
+    // Provide a JSON object to enforce e.g.
+    // `{"runAsNonRoot": true, "runAsUser": 1000, "allowPrivilegeEscalation": false,
+    //   "capabilities": {"drop": ["ALL"]}, "seccompProfile": {"type": "RuntimeDefault"}}`.
+    KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT: JsonObjectEnv(
+      "KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT",
+      { valueValidator: JsonAny }
+    ),
+    // Name of a Kubernetes Secret to envFrom-mount into every worker pod's
+    // container. Pulls every key/value pair in the secret as env vars on
+    // the worker. Resolved by the kubelet at pod creation time; the
+    // supervisor never reads the secret values, so this needs no extra
+    // RBAC. Use case: keep task-time secrets (DB URLs, API keys) in
+    // Kubernetes rather than syncing them through the trigger.dev webapp.
+    KUBERNETES_WORKER_ENV_FROM_SECRET: z.string().optional(),
     KUBERNETES_IMAGE_PULL_SECRETS: z.string().optional(), // csv
     KUBERNETES_EPHEMERAL_STORAGE_SIZE_LIMIT: z.string().default("10Gi"),
     KUBERNETES_EPHEMERAL_STORAGE_SIZE_REQUEST: z.string().default("2Gi"),

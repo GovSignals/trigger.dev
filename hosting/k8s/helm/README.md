@@ -259,6 +259,27 @@ supervisor:
 
 The supervisor `extraVolumes` / `extraVolumeMounts` keys behave identically to the webapp ones. Both render unconditionally — they don't require any other feature toggle.
 
+### Supervisor init containers
+
+`supervisor.extraInitContainers` prepends init containers to the supervisor pod. It accepts a list, or a string that is `tpl`-rendered in chart scope (the same contract as `webapp.extraContainers`), so entries can use helpers such as `trigger-v4.fullname`.
+
+The supervisor makes one connect call to the webapp when it boots and exits 1 if that call fails; Kubernetes then restarts it with backoff. If your webapp is a single replica that runs migrations at boot, a node drain that reschedules both pods leaves the supervisor crash-looping until the webapp is back. Gating on the webapp health endpoint avoids the restarts:
+
+```yaml
+supervisor:
+  extraInitContainers: |
+    - name: wait-for-webapp
+      image: curlimages/curl:8.5.0
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          until curl -sf http://{{ include "trigger-v4.fullname" . }}-webapp:{{ .Values.webapp.service.port }}/healthcheck; do
+            echo "webapp not ready"; sleep 5
+          done
+```
+
+The pod sits in `Init:0/1` (no restart counter) until the webapp answers, then the supervisor starts and connects normally.
+
 ### Worker pod security context
 
 By default the supervisor doesn't set a `securityContext` on the worker pods it schedules — it lets the cluster's PodSecurity admission / SCC apply whatever defaults are configured. If you need to enforce explicit pod- or container-level security, set:

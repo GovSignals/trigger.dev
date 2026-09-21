@@ -419,6 +419,23 @@ supervisor:
     #   mountPath: /etc/ssl/enterprise-ca
     #   readOnly: true
 
+  # Extra init containers prepended to the Supervisor pod. Accepts a list,
+  # or a string that is tpl-rendered in chart scope (same contract as
+  # `webapp.extraContainers`), so entries can reference helpers and values.
+  #
+  # Typical use: gate supervisor start on the webapp's /healthcheck. The
+  # supervisor makes a single connect call to the webapp at boot and exits 1
+  # when it fails, so a webapp that is still running boot migrations turns
+  # into a supervisor CrashLoopBackOff. Waiting here keeps the pod in
+  # Init:0/1 (no restart counter) until the webapp answers.
+  extraInitContainers:
+    []
+    # - name: wait-for-webapp
+    #   image: curlimages/curl:8.5.0
+    #   command: ["/bin/sh", "-c"]
+    #   args:
+    #     - until curl -sf http://{{ include "trigger-v4.fullname" . }}-webapp:{{ .Values.webapp.service.port }}/healthcheck; do sleep 5; done
+
   # ServiceMonitor for Prometheus monitoring
   serviceMonitor:
     enabled: false

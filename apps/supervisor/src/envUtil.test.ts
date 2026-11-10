@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { BoolEnv, AdditionalEnvVars, JsonObjectEnv, JsonAny } from "./envUtil.js";
+import { BoolEnv, AdditionalEnvVars, JsonObjectEnv, JsonAny, JsonArrayEnv } from "./envUtil.js";
 
 describe("BoolEnv", () => {
   it("should parse string 'true' as true", () => {
@@ -212,5 +212,48 @@ describe("JsonObjectEnv (flat string values, K8s-annotation shape)", () => {
   it("rejects numeric and boolean values", () => {
     expect(() => schema.parse('{"some/annotation":42}')).toThrowError(/has invalid value/);
     expect(() => schema.parse('{"some/annotation":true}')).toThrowError(/has invalid value/);
+  });
+});
+
+describe("JsonArrayEnv", () => {
+  const schema = JsonArrayEnv("TEST_ARRAY", {
+    itemValidator: z.object({ name: z.string().min(1) }).catchall(JsonAny),
+  });
+
+  it("returns empty array for default (no value)", () => {
+    expect(schema.parse(undefined)).toEqual([]);
+  });
+
+  it("parses an empty JSON array", () => {
+    expect(schema.parse("[]")).toEqual([]);
+  });
+
+  it("parses an array of objects, keeping nested fields", () => {
+    expect(
+      schema.parse('[{"name":"a","configMap":{"name":"cm","items":[{"key":"k","path":"p"}]}}]')
+    ).toEqual([{ name: "a", configMap: { name: "cm", items: [{ key: "k", path: "p" }] } }]);
+  });
+
+  it("rejects non-JSON input", () => {
+    expect(() => schema.parse("not json")).toThrowError(/TEST_ARRAY is not valid JSON/);
+  });
+
+  it("rejects JSON objects", () => {
+    expect(() => schema.parse('{"name":"a"}')).toThrowError(
+      /TEST_ARRAY must be a JSON array \(got object\)/
+    );
+  });
+
+  it("rejects JSON primitives and null", () => {
+    expect(() => schema.parse('"foo"')).toThrowError(/must be a JSON array \(got string\)/);
+    expect(() => schema.parse("42")).toThrowError(/must be a JSON array \(got number\)/);
+    expect(() => schema.parse("null")).toThrowError(/must be a JSON array \(got null\)/);
+  });
+
+  it("rejects items that fail the item validator", () => {
+    expect(() => schema.parse('["a"]')).toThrowError(/TEST_ARRAY has invalid item/);
+    expect(() => schema.parse("[{}]")).toThrowError(/TEST_ARRAY has invalid item/);
+    expect(() => schema.parse('[{"name":""}]')).toThrowError(/TEST_ARRAY has invalid item/);
+    expect(() => schema.parse('[{"name":1}]')).toThrowError(/TEST_ARRAY has invalid item/);
   });
 });

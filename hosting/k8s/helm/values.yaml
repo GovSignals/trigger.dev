@@ -336,6 +336,22 @@ supervisor:
       workerNodetypeLabel: "" # When set, runs will only be scheduled on nodes with "nodetype=<label>"
       workerServiceAccount: "" # Service account name for worker pods. Empty = use namespace's "default" SA. Set to e.g. "trigger-worker" to pin a dedicated SA.
       workerAutomountServiceAccountToken: false # Whether to mount the SA token in worker pods. Keep false unless pods need K8s API access.
+      # Extra volumes added to every worker (task run) pod, as Kubernetes V1Volume objects.
+      # Each name must be unique. Empty = worker pods get no extra volumes.
+      # Example (mount a CA bundle configmap):
+      #   workerVolumes:
+      #     - name: extra-ca
+      #       configMap:
+      #         name: my-ca-bundle
+      workerVolumes: []
+      # Mounts added to the run-controller container of every worker pod, as V1VolumeMount objects.
+      # Each name must match an entry in workerVolumes, or the supervisor refuses to start.
+      # Example:
+      #   workerVolumeMounts:
+      #     - name: extra-ca
+      #       mountPath: /etc/ssl/extra-ca
+      #       readOnly: true
+      workerVolumeMounts: []
       ephemeralStorageSizeLimit: "" # Default: 10Gi
       ephemeralStorageSizeRequest: "" # Default: 2Gi´
     podCleaner:

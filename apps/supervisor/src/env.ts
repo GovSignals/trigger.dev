@@ -1,7 +1,8 @@
 import { randomUUID } from "crypto";
 import { env as stdEnv } from "std-env";
 import { z } from "zod";
-import { AdditionalEnvVars, BoolEnv, JsonAny, JsonObjectEnv } from "./envUtil.js";
+import { AdditionalEnvVars, BoolEnv, JsonAny, JsonArrayEnv, JsonObjectEnv } from "./envUtil.js";
+import { findWorkerVolumeConfigErrors } from "./workloadManager/kubernetesPodSpec.js";
 
 export const Env = z
   .object({
@@ -220,6 +221,23 @@ export const Env = z
     // RBAC. Use case: keep task-time secrets (DB URLs, API keys) in
     // Kubernetes rather than syncing them through the trigger.dev webapp.
     KUBERNETES_WORKER_ENV_FROM_SECRET: z.string().optional(),
+    // Extra volumes added to every worker pod (array of V1Volume objects), e.g.
+    // `[{"name":"extra-ca","configMap":{"name":"my-ca-bundle"}}]`. Default is
+    // empty `[]`, which leaves the pod spec unchanged. Each entry needs a unique
+    // `name`; the rest of the object is passed to Kubernetes as-is.
+    KUBERNETES_WORKER_VOLUMES: JsonArrayEnv("KUBERNETES_WORKER_VOLUMES", {
+      itemValidator: z.object({ name: z.string().min(1) }).catchall(JsonAny),
+    }),
+    // Mounts added to the run-controller container of every worker pod (array
+    // of V1VolumeMount objects), e.g.
+    // `[{"name":"extra-ca","mountPath":"/etc/ssl/extra-ca","readOnly":true}]`.
+    // Default is empty `[]`. Every `name` must match a volume in
+    // KUBERNETES_WORKER_VOLUMES; the supervisor refuses to start otherwise.
+    KUBERNETES_WORKER_VOLUME_MOUNTS: JsonArrayEnv("KUBERNETES_WORKER_VOLUME_MOUNTS", {
+      itemValidator: z
+        .object({ name: z.string().min(1), mountPath: z.string().min(1) })
+        .catchall(JsonAny),
+    }),
     KUBERNETES_IMAGE_PULL_SECRETS: z.string().optional(), // csv
     KUBERNETES_EPHEMERAL_STORAGE_SIZE_LIMIT: z.string().default("10Gi"),
     KUBERNETES_EPHEMERAL_STORAGE_SIZE_REQUEST: z.string().default("2Gi"),
@@ -395,6 +413,22 @@ export const Env = z
     TRIGGER_WIDE_EVENTS_NOISY_ROUTES: BoolEnv.default(false),
   })
   .superRefine((data, ctx) => {
+    // Only cross-check once both lists parsed; a parse failure is already reported.
+    if (
+      Array.isArray(data.KUBERNETES_WORKER_VOLUMES) &&
+      Array.isArray(data.KUBERNETES_WORKER_VOLUME_MOUNTS)
+    ) {
+      for (const error of findWorkerVolumeConfigErrors(
+        data.KUBERNETES_WORKER_VOLUMES,
+        data.KUBERNETES_WORKER_VOLUME_MOUNTS
+      )) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: error.message,
+          path: [error.envVar],
+        });
+      }
+    }
     if (
       data.TRIGGER_DEQUEUE_BACKPRESSURE_POD_COUNT_ENABLED &&
       data.TRIGGER_DEQUEUE_BACKPRESSURE_POD_COUNT_RELEASE >=

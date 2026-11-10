@@ -327,7 +327,7 @@ supervisor:
       value: NODE_EXTRA_CA_CERTS=/etc/ssl/extra-ca/ca.pem
 ```
 
-The volumes are added to the pod spec alongside anything the supervisor already sets. Each mount must name a volume in `workerVolumes`, volume names and mount paths must be unique, each volume needs exactly one source, and keys Kubernetes doesn't recognise (such as a misspelled `configmap`) are rejected; the supervisor checks all of this at startup and exits with an error naming `KUBERNETES_WORKER_VOLUMES` or `KUBERNETES_WORKER_VOLUME_MOUNTS` if anything is wrong. The volume source (for example the configmap) must exist in the namespace the worker pods run in, otherwise every worker pod stays in `ContainerCreating` and runs hang until they time out.
+The volumes are added to the pod spec alongside anything the supervisor already sets. Each mount must name a volume in `workerVolumes`, volume names and mount paths must be unique, each volume needs exactly one source, and top-level keys outside `V1Volume` / `V1VolumeMount` (such as a misspelled `configmap`) are rejected; the supervisor checks all of this at startup and exits with an error naming `KUBERNETES_WORKER_VOLUMES` or `KUBERNETES_WORKER_VOLUME_MOUNTS` if anything is wrong. Fields nested inside a volume source are passed through unchecked, and the Kubernetes client drops any it doesn't recognise, so check spelling there by hand. The volume source (for example the configmap) must exist in the namespace the worker pods run in, otherwise every worker pod stays in `ContainerCreating` and runs hang until they time out.
 
 ## Deployment Modes
 

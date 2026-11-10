@@ -174,6 +174,17 @@ describe("WorkerVolumeSchema", () => {
     });
   });
 
+  it.each([
+    ["projected", { sources: [{ configMap: { name: "my-ca-bundle" } }] }],
+    ["csi", { driver: "secrets-store.csi.k8s.io" }],
+    ["ephemeral", { volumeClaimTemplate: { spec: {} } }],
+    ["downwardAPI", { items: [] }],
+    ["secret", { secretName: "my-secret" }],
+  ])("accepts a %s volume source", (source, value) => {
+    const volume = { name: "extra", [source]: value };
+    expect(WorkerVolumeSchema.parse(volume)).toEqual(volume);
+  });
+
   it("rejects an unknown top-level key such as a lowercase configmap, naming the key", () => {
     expect(
       issueMessages(

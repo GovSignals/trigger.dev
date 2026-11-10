@@ -228,6 +228,12 @@ describe("JsonArrayEnv", () => {
     expect(schema.parse("[]")).toEqual([]);
   });
 
+  it("treats an empty or whitespace-only value as an empty array", () => {
+    expect(schema.parse("")).toEqual([]);
+    expect(schema.parse("   ")).toEqual([]);
+    expect(schema.parse("\n\t ")).toEqual([]);
+  });
+
   it("parses an array of objects, keeping nested fields", () => {
     expect(
       schema.parse('[{"name":"a","configMap":{"name":"cm","items":[{"key":"k","path":"p"}]}}]')

@@ -5,6 +5,8 @@ import {
   withBlockIoUringSeccompProfile,
   withWorkerVolumeMounts,
   withWorkerVolumes,
+  WorkerVolumeMountSchema,
+  WorkerVolumeSchema,
 } from "./kubernetesPodSpec.js";
 
 const basePodSpec = {
@@ -127,6 +129,29 @@ describe("findWorkerVolumeConfigErrors", () => {
     ]);
   });
 
+  it("reports two mounts at the same path once, naming the env var", () => {
+    const other = { name: "other", emptyDir: {} };
+    const clash = { name: "other", mountPath: caMount.mountPath };
+    expect(findWorkerVolumeConfigErrors([caVolume, other], [caMount, clash, { ...clash }])).toEqual(
+      [
+        {
+          envVar: "KUBERNETES_WORKER_VOLUME_MOUNTS",
+          message:
+            'KUBERNETES_WORKER_VOLUME_MOUNTS has more than one mount at path "/etc/ssl/extra-ca"',
+        },
+      ]
+    );
+  });
+
+  it("accepts two mounts of the same volume at different paths", () => {
+    expect(
+      findWorkerVolumeConfigErrors(
+        [caVolume],
+        [caMount, { name: "extra-ca", mountPath: "/etc/ssl/certs/extra" }]
+      )
+    ).toEqual([]);
+  });
+
   it("reports two volumes sharing a name once, naming the env var", () => {
     expect(findWorkerVolumeConfigErrors([caVolume, caVolume, caVolume], [caMount])).toEqual([
       {
@@ -134,5 +159,68 @@ describe("findWorkerVolumeConfigErrors", () => {
         message: 'KUBERNETES_WORKER_VOLUMES has more than one volume named "extra-ca"',
       },
     ]);
+  });
+});
+
+const issueMessages = (result: { success: boolean; error?: { issues: { message: string }[] } }) =>
+  result.success ? [] : (result.error?.issues.map((issue) => issue.message) ?? []);
+
+describe("WorkerVolumeSchema", () => {
+  it("accepts a volume with one known source", () => {
+    expect(WorkerVolumeSchema.parse(caVolume)).toEqual(caVolume);
+    expect(WorkerVolumeSchema.parse({ name: "scratch", emptyDir: {} })).toEqual({
+      name: "scratch",
+      emptyDir: {},
+    });
+  });
+
+  it("rejects an unknown top-level key such as a lowercase configmap, naming the key", () => {
+    expect(
+      issueMessages(
+        WorkerVolumeSchema.safeParse({ name: "extra-ca", configmap: { name: "my-ca-bundle" } })
+      )
+    ).toEqual([
+      'unknown key "configmap" (not a V1Volume field)',
+      'volume "extra-ca" must have exactly one volume source (got none)',
+    ]);
+  });
+
+  it("rejects a volume with no source", () => {
+    expect(issueMessages(WorkerVolumeSchema.safeParse({ name: "extra-ca" }))).toEqual([
+      'volume "extra-ca" must have exactly one volume source (got none)',
+    ]);
+  });
+
+  it("rejects a volume with two sources", () => {
+    expect(
+      issueMessages(
+        WorkerVolumeSchema.safeParse({
+          name: "extra-ca",
+          configMap: { name: "my-ca-bundle" },
+          secret: { secretName: "my-ca-secret" },
+        })
+      )
+    ).toEqual(['volume "extra-ca" must have exactly one volume source (got configMap, secret)']);
+  });
+
+  it("rejects a source whose value is not a JSON object", () => {
+    for (const value of ["my-ca-bundle", 1, true, null, [{ name: "my-ca-bundle" }]]) {
+      expect(
+        issueMessages(WorkerVolumeSchema.safeParse({ name: "extra-ca", configMap: value }))
+      ).toEqual(['volume source "configMap" must be a JSON object']);
+    }
+  });
+});
+
+describe("WorkerVolumeMountSchema", () => {
+  it("accepts a mount using only V1VolumeMount fields", () => {
+    const mount = { ...caMount, subPath: "ca.pem", mountPropagation: "None" };
+    expect(WorkerVolumeMountSchema.parse(mount)).toEqual(mount);
+  });
+
+  it("rejects an unknown top-level key, naming the key", () => {
+    expect(
+      issueMessages(WorkerVolumeMountSchema.safeParse({ ...caMount, readonly: true }))
+    ).toEqual(['unknown key "readonly" (not a V1VolumeMount field)']);
   });
 });

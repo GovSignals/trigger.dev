@@ -135,9 +135,10 @@ type JsonArrayEnvOpts<TSchema extends z.ZodTypeAny> = {
 };
 
 /**
- * Factory for env vars that hold a JSON array. The default is the empty array,
- * so callers can check `.length` and spread the parsed result into Kubernetes
- * manifests without branching on undefined.
+ * Factory for env vars that hold a JSON array. Unset, empty and whitespace-only
+ * values all parse to the empty array, so callers can check `.length` and
+ * spread the parsed result into Kubernetes manifests without branching on
+ * undefined.
  *
  * @example
  *   KUBERNETES_WORKER_VOLUMES: JsonArrayEnv("KUBERNETES_WORKER_VOLUMES", {
@@ -152,6 +153,10 @@ export const JsonArrayEnv = <TSchema extends z.ZodTypeAny>(
     .string()
     .default("[]")
     .transform((raw, ctx): z.infer<TSchema>[] => {
+      if (raw.trim() === "") {
+        return [];
+      }
+
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw);
@@ -177,7 +182,9 @@ export const JsonArrayEnv = <TSchema extends z.ZodTypeAny>(
       if (!validated.success) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `${envName} has invalid item(s): ${validated.error.message}`,
+          message: `${envName} has invalid item(s): ${validated.error.issues
+            .map((issue) => `[${issue.path.join(".")}] ${issue.message}`)
+            .join("; ")}`,
         });
         return z.NEVER;
       }

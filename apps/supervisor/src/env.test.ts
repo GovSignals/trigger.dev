@@ -106,6 +106,39 @@ describe("Env superRefine - worker volumes", () => {
     ]);
   });
 
+  it("refuses to start on a misspelled volume source, naming the env var and the key", () => {
+    const messages = issueMessages({
+      KUBERNETES_WORKER_VOLUMES: '[{"name":"extra-ca","configmap":{"name":"my-ca-bundle"}}]',
+    });
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(/^KUBERNETES_WORKER_VOLUMES has invalid item\(s\): /);
+    expect(messages[0]).toContain('[0.configmap] unknown key "configmap" (not a V1Volume field)');
+  });
+
+  it("refuses to start when two mounts share a mountPath", () => {
+    expect(
+      issueMessages({
+        KUBERNETES_WORKER_VOLUMES: volumes,
+        KUBERNETES_WORKER_VOLUME_MOUNTS: JSON.stringify([
+          { name: "extra-ca", mountPath: "/etc/ssl/extra-ca" },
+          { name: "extra-ca", mountPath: "/etc/ssl/extra-ca", readOnly: true },
+        ]),
+      })
+    ).toEqual([
+      'KUBERNETES_WORKER_VOLUME_MOUNTS has more than one mount at path "/etc/ssl/extra-ca"',
+    ]);
+  });
+
+  it("treats blank values as empty lists", () => {
+    const parsed = Env.parse({
+      ...base,
+      KUBERNETES_WORKER_VOLUMES: "",
+      KUBERNETES_WORKER_VOLUME_MOUNTS: "  ",
+    });
+    expect(parsed.KUBERNETES_WORKER_VOLUMES).toEqual([]);
+    expect(parsed.KUBERNETES_WORKER_VOLUME_MOUNTS).toEqual([]);
+  });
+
   it("refuses to start when a mount has no mountPath, reporting only the parse error", () => {
     const messages = issueMessages({
       KUBERNETES_WORKER_VOLUMES: volumes,

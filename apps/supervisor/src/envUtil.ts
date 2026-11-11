@@ -126,3 +126,69 @@ export const JsonObjectEnv = <TSchema extends z.ZodTypeAny = typeof JsonStringVa
         : Record<string, unknown>;
     });
 };
+
+type JsonArrayEnvOpts<TSchema extends z.ZodTypeAny> = {
+  /**
+   * Schema applied to each *item* in the parsed array.
+   */
+  itemValidator: TSchema;
+};
+
+/**
+ * Factory for env vars that hold a JSON array. Unset, empty and whitespace-only
+ * values all parse to the empty array, so callers can check `.length` and
+ * spread the parsed result into Kubernetes manifests without branching on
+ * undefined.
+ *
+ * @example
+ *   KUBERNETES_WORKER_VOLUMES: JsonArrayEnv("KUBERNETES_WORKER_VOLUMES", {
+ *     itemValidator: z.object({ name: z.string().min(1) }).catchall(JsonAny),
+ *   }),
+ */
+export const JsonArrayEnv = <TSchema extends z.ZodTypeAny>(
+  envName: string,
+  opts: JsonArrayEnvOpts<TSchema>
+) => {
+  return z
+    .string()
+    .default("[]")
+    .transform((raw, ctx): z.infer<TSchema>[] => {
+      if (raw.trim() === "") {
+        return [];
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${envName} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+        });
+        return z.NEVER;
+      }
+
+      if (!Array.isArray(parsed)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${envName} must be a JSON array (got ${
+            parsed === null ? "null" : typeof parsed
+          })`,
+        });
+        return z.NEVER;
+      }
+
+      const validated = z.array(opts.itemValidator).safeParse(parsed);
+      if (!validated.success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${envName} has invalid item(s): ${validated.error.issues
+            .map((issue) => `[${issue.path.join(".")}] ${issue.message}`)
+            .join("; ")}`,
+        });
+        return z.NEVER;
+      }
+
+      return validated.data;
+    });
+};

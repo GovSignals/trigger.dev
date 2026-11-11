@@ -210,6 +210,14 @@ spec:
             - name: KUBERNETES_WORKER_POD_ANNOTATIONS
               value: {{ .Values.supervisor.config.kubernetes.workerPodAnnotations | toJson | quote }}
             {{- end }}
+            {{- if .Values.supervisor.config.kubernetes.workerVolumes }}
+            - name: KUBERNETES_WORKER_VOLUMES
+              value: {{ .Values.supervisor.config.kubernetes.workerVolumes | toJson | quote }}
+            {{- end }}
+            {{- if .Values.supervisor.config.kubernetes.workerVolumeMounts }}
+            - name: KUBERNETES_WORKER_VOLUME_MOUNTS
+              value: {{ .Values.supervisor.config.kubernetes.workerVolumeMounts | toJson | quote }}
+            {{- end }}
             {{- $registryAuthEnabled := false }}
             {{- if .Values.registry.deploy }}
               {{- $registryAuthEnabled = .Values.registry.auth.enabled }}

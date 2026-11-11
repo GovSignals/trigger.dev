@@ -304,6 +304,31 @@ supervisor:
       value: '{"sidecar.istio.io/inject":"false"}'
 ```
 
+### Worker pod volumes
+
+`supervisor.config.kubernetes.workerVolumes` and `workerVolumeMounts` add volumes to every worker (task run) pod the supervisor creates, and mount them into its `run-controller` container. Both take plain Kubernetes `V1Volume` / `V1VolumeMount` objects and default to `[]`, which leaves worker pods unchanged.
+
+A common use is giving task code a private CA bundle so it can call internal HTTPS endpoints. Mount the bundle, then point Node in the worker pods at it by adding `NODE_EXTRA_CA_CERTS` to the supervisor's `RUNNER_ADDITIONAL_ENV_VARS` (a comma-separated `KEY=value` list the supervisor copies into every worker pod):
+
+```yaml
+supervisor:
+  config:
+    kubernetes:
+      workerVolumes:
+        - name: extra-ca
+          configMap:
+            name: my-ca-bundle
+      workerVolumeMounts:
+        - name: extra-ca
+          mountPath: /etc/ssl/extra-ca
+          readOnly: true
+  extraEnvVars:
+    - name: RUNNER_ADDITIONAL_ENV_VARS
+      value: NODE_EXTRA_CA_CERTS=/etc/ssl/extra-ca/ca.pem
+```
+
+The volumes are added to the pod spec alongside anything the supervisor already sets. Each mount must name a volume in `workerVolumes`, volume names and mount paths must be unique, each volume needs exactly one source, and top-level keys outside `V1Volume` / `V1VolumeMount` (such as a misspelled `configmap`) are rejected; the supervisor checks all of this at startup and exits with an error naming `KUBERNETES_WORKER_VOLUMES` or `KUBERNETES_WORKER_VOLUME_MOUNTS` if anything is wrong. Fields nested inside a volume source are passed through unchecked, and the Kubernetes client drops any it doesn't recognise, so check spelling there by hand. The volume source (for example the configmap) must exist in the namespace the worker pods run in, otherwise every worker pod stays in `ContainerCreating` and runs hang until they time out.
+
 ## Deployment Modes
 
 ### Testing/Development

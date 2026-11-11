@@ -14,7 +14,11 @@ import { PlacementTagProcessor } from "@trigger.dev/core/v3/serverOnly";
 import { env } from "../env.js";
 import { type K8sApi, createK8sApi, type k8s } from "../clients/kubernetes.js";
 import { getRunnerId } from "../util.js";
-import { withBlockIoUringSeccompProfile } from "./kubernetesPodSpec.js";
+import {
+  withBlockIoUringSeccompProfile,
+  withWorkerVolumeMounts,
+  withWorkerVolumes,
+} from "./kubernetesPodSpec.js";
 
 type ResourceQuantities = {
   [K in "cpu" | "memory" | "ephemeral-storage"]?: string;
@@ -106,7 +110,10 @@ export class KubernetesWorkloadManager implements WorkloadManager {
     const runnerId = getRunnerId(opts.runFriendlyId, opts.nextAttemptNumber);
 
     try {
-      const basePodSpec = this.addPlacementTags(this.#defaultPodSpec, opts.placementTags);
+      const basePodSpec = withWorkerVolumes(
+        this.addPlacementTags(this.#defaultPodSpec, opts.placementTags),
+        env.KUBERNETES_WORKER_VOLUMES
+      );
       const podSpec = this.opts.checkpointsEnabled
         ? withBlockIoUringSeccompProfile(basePodSpec, opts.runtime)
         : basePodSpec;
@@ -136,7 +143,7 @@ export class KubernetesWorkloadManager implements WorkloadManager {
             affinity: this.#getAffinity(opts),
             tolerations: this.#getScheduleTolerations(this.#isScheduledRun(opts)),
             terminationGracePeriodSeconds: 60 * 60,
-            containers: [
+            containers: withWorkerVolumeMounts(env.KUBERNETES_WORKER_VOLUME_MOUNTS, [
               {
                 name: "run-controller",
                 image: this.stripImageDigest(opts.image),
@@ -284,7 +291,7 @@ export class KubernetesWorkloadManager implements WorkloadManager {
                     : []),
                 ],
               },
-            ],
+            ]),
           },
         },
       });

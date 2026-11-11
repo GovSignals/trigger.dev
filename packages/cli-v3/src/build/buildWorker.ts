@@ -39,6 +39,7 @@ export type BuildWorkerOptions = {
   rewritePaths?: boolean;
   forcedExternals?: string[];
   plain?: boolean;
+  containerfileModule?: string;
 };
 
 export async function buildWorker(options: BuildWorkerOptions) {
@@ -137,6 +138,7 @@ export async function buildWorker(options: BuildWorkerOptions) {
       resolvedConfig,
       outputPath: options.destination,
       bundleResult,
+      containerfileModule: options.containerfileModule,
     });
   }
 
@@ -196,11 +198,13 @@ async function writeDeployFiles({
   resolvedConfig,
   outputPath,
   bundleResult,
+  containerfileModule,
 }: {
   buildManifest: BuildManifest;
   resolvedConfig: ResolvedConfig;
   outputPath: string;
   bundleResult: BundleResult;
+  containerfileModule?: string;
 }) {
   // Step 1. Read the package.json file
   const packageJson = await readProjectPackageJson(resolvedConfig.packageJsonPath);
@@ -237,7 +241,7 @@ async function writeDeployFiles({
   );
 
   await writeJSONFile(join(outputPath, "build.json"), buildManifestToJSON(buildManifest));
-  await writeContainerfile(outputPath, buildManifest);
+  await writeContainerfile(outputPath, buildManifest, containerfileModule);
 }
 
 async function readProjectPackageJson(packageJsonPath: string) {
@@ -246,7 +250,11 @@ async function readProjectPackageJson(packageJsonPath: string) {
   return packageJson;
 }
 
-async function writeContainerfile(outputPath: string, buildManifest: BuildManifest) {
+async function writeContainerfile(
+  outputPath: string,
+  buildManifest: BuildManifest,
+  containerfileModule?: string
+) {
   if (!buildManifest.runControllerEntryPoint || !buildManifest.indexControllerEntryPoint) {
     throw new Error("Something went wrong with the build. Aborting deployment. [code 7789]");
   }
@@ -257,6 +265,7 @@ async function writeContainerfile(outputPath: string, buildManifest: BuildManife
     build: buildManifest.build,
     image: buildManifest.image,
     indexScript: buildManifest.indexControllerEntryPoint,
+    containerfileModule,
   });
 
   const containerfilePath = join(outputPath, "Containerfile");

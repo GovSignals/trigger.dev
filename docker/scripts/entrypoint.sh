@@ -1,6 +1,11 @@
 #!/bin/sh
 set -xe
 
+if [ "$1" = "migrate" ]; then
+  echo "Running migrations only (entrypoint.sh migrate mode)"
+  SKIP_POSTGRES_MIGRATIONS=0
+fi
+
 if [ -n "$DATABASE_HOST" ]; then
   scripts/wait-for-it.sh ${DATABASE_HOST} -- echo "database is up"
 fi
@@ -84,6 +89,11 @@ else
   echo "CLICKHOUSE_URL not set, skipping ClickHouse migrations."
 fi
 set -x
+
+if [ "$1" = "migrate" ]; then
+  echo "Migrations complete, exiting."
+  exit 0
+fi
 
 # Copy over required prisma files
 cp internal-packages/database/prisma/schema.prisma apps/webapp/prisma/

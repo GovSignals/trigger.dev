@@ -225,6 +225,110 @@ postgres:
         memory: 2Gi
 ```
 
+### CA bundle injection (webapp + supervisor)
+
+For environments where the webapp or supervisor needs to validate TLS against an internal/private CA (e.g. a corporate proxy, an enterprise image registry, an internal trigger.dev API endpoint), mount the CA bundle into the pod via `extraVolumes` / `extraVolumeMounts` and point Node at it with `NODE_EXTRA_CA_CERTS`:
+
+```yaml
+webapp:
+  extraVolumes:
+    - name: ca-bundle
+      configMap:
+        name: enterprise-ca-bundle
+  extraVolumeMounts:
+    - name: ca-bundle
+      mountPath: /etc/ssl/enterprise-ca
+      readOnly: true
+  extraEnvVars:
+    - name: NODE_EXTRA_CA_CERTS
+      value: /etc/ssl/enterprise-ca/ca.crt
+
+supervisor:
+  extraVolumes:
+    - name: ca-bundle
+      configMap:
+        name: enterprise-ca-bundle
+  extraVolumeMounts:
+    - name: ca-bundle
+      mountPath: /etc/ssl/enterprise-ca
+      readOnly: true
+  extraEnvVars:
+    - name: NODE_EXTRA_CA_CERTS
+      value: /etc/ssl/enterprise-ca/ca.crt
+```
+
+The supervisor `extraVolumes` / `extraVolumeMounts` keys behave identically to the webapp ones. Both render unconditionally — they don't require any other feature toggle.
+
+### Supervisor init containers
+
+`supervisor.extraInitContainers` prepends init containers to the supervisor pod. It accepts a list, or a string that is `tpl`-rendered in chart scope (the same contract as `webapp.extraContainers`), so entries can use helpers such as `trigger-v4.fullname`.
+
+The supervisor makes one connect call to the webapp when it boots and exits 1 if that call fails; Kubernetes then restarts it with backoff. If your webapp is a single replica that runs migrations at boot, a node drain that reschedules both pods leaves the supervisor crash-looping until the webapp is back. Gating on the webapp health endpoint avoids the restarts:
+
+```yaml
+supervisor:
+  extraInitContainers: |
+    - name: wait-for-webapp
+      image: curlimages/curl:8.5.0
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          until curl -sf http://{{ include "trigger-v4.fullname" . }}-webapp:{{ .Values.webapp.service.port }}/healthcheck; do
+            echo "webapp not ready"; sleep 5
+          done
+```
+
+The pod sits in `Init:0/1` (no restart counter) until the webapp answers, then the supervisor starts and connects normally.
+
+### Worker pod security context
+
+By default the supervisor doesn't set a `securityContext` on the worker pods it schedules — it lets the cluster's PodSecurity admission / SCC apply whatever defaults are configured. If you need to enforce explicit pod- or container-level security, set:
+
+```yaml
+supervisor:
+  extraEnvVars:
+    - name: KUBERNETES_WORKER_POD_SECURITY_CONTEXT
+      value: '{"runAsNonRoot":true,"runAsUser":1000,"fsGroup":1000}'
+    - name: KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT
+      value: '{"runAsNonRoot":true,"runAsUser":1000,"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"seccompProfile":{"type":"RuntimeDefault"}}'
+```
+
+These map directly to Kubernetes `V1PodSecurityContext` and `V1SecurityContext`. Don't set `runAsUser` on OpenShift — leave both env vars unset and let the namespace SCC inject the UID range.
+
+To pass extra annotations (e.g. for service-mesh sidecar injection) onto every worker pod:
+
+```yaml
+supervisor:
+  extraEnvVars:
+    - name: KUBERNETES_WORKER_POD_ANNOTATIONS
+      value: '{"sidecar.istio.io/inject":"false"}'
+```
+
+### Worker pod volumes
+
+`supervisor.config.kubernetes.workerVolumes` and `workerVolumeMounts` add volumes to every worker (task run) pod the supervisor creates, and mount them into its `run-controller` container. Both take plain Kubernetes `V1Volume` / `V1VolumeMount` objects and default to `[]`, which leaves worker pods unchanged.
+
+A common use is giving task code a private CA bundle so it can call internal HTTPS endpoints. Mount the bundle, then point Node in the worker pods at it by adding `NODE_EXTRA_CA_CERTS` to the supervisor's `RUNNER_ADDITIONAL_ENV_VARS` (a comma-separated `KEY=value` list the supervisor copies into every worker pod):
+
+```yaml
+supervisor:
+  config:
+    kubernetes:
+      workerVolumes:
+        - name: extra-ca
+          configMap:
+            name: my-ca-bundle
+      workerVolumeMounts:
+        - name: extra-ca
+          mountPath: /etc/ssl/extra-ca
+          readOnly: true
+  extraEnvVars:
+    - name: RUNNER_ADDITIONAL_ENV_VARS
+      value: NODE_EXTRA_CA_CERTS=/etc/ssl/extra-ca/ca.pem
+```
+
+The volumes are added to the pod spec alongside anything the supervisor already sets. Each mount must name a volume in `workerVolumes`, volume names and mount paths must be unique, each volume needs exactly one source, and top-level keys outside `V1Volume` / `V1VolumeMount` (such as a misspelled `configmap`) are rejected; the supervisor checks all of this at startup and exits with an error naming `KUBERNETES_WORKER_VOLUMES` or `KUBERNETES_WORKER_VOLUME_MOUNTS` if anything is wrong. Fields nested inside a volume source are passed through unchecked, and the Kubernetes client drops any it doesn't recognise, so check spelling there by hand. The volume source (for example the configmap) must exist in the namespace the worker pods run in, otherwise every worker pod stays in `ContainerCreating` and runs hang until they time out.
+
 ## Deployment Modes
 
 ### Testing/Development

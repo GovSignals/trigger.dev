@@ -715,6 +715,8 @@ const EnvironmentSchema = z
     OBJECT_STORE_SECRET_ACCESS_KEY: z.string().optional(),
     OBJECT_STORE_REGION: z.string().optional(),
     OBJECT_STORE_SERVICE: z.string().default("s3"),
+    // IAM mode only. Set false for endpoints that reject path-style requests (AWS FIPS endpoints).
+    OBJECT_STORE_FORCE_PATH_STYLE: BoolEnv.default(true),
 
     // Protocol to use for new uploads (e.g., "s3", "r2"). Data without protocol uses default provider above.
     // If specified, you must configure the corresponding provider using OBJECT_STORE_{PROTOCOL}_* env vars.

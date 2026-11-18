@@ -422,11 +422,14 @@ ClickHouse hostname
 {{/*
 ClickHouse URL for application (with secure parameter)
 
-Note on the external+existingSecret branch: the password is expanded via
+Note on `$(CLICKHOUSE_PASSWORD)`: the password is expanded via
 Kubernetes' `$(VAR)` syntax, not shell `${VAR}`. Kubelet substitutes
 `$(CLICKHOUSE_PASSWORD)` at container-creation time from the
 CLICKHOUSE_PASSWORD env var declared just before CLICKHOUSE_URL in
-webapp.yaml. Shell-style `${...}` does not work here because
+webapp.yaml. Both the `deploy: true` and external+existingSecret
+branches use this placeholder so that the chart never bakes the
+password literal into a rendered URL string. Shell-style `${...}`
+does not work here because
 `docker/scripts/entrypoint.sh` assigns CLICKHOUSE_URL to GOOSE_DBSTRING
 with a single-pass expansion (`export GOOSE_DBSTRING="$CLICKHOUSE_URL"`),
 so any inner `${...}` reaches goose verbatim and fails URL parsing.

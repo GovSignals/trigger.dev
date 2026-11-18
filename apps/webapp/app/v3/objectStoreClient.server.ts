@@ -87,6 +87,7 @@ type AwsSdkConfig = {
   bucket: string;
   baseUrl: string;
   region?: string;
+  forcePathStyle: boolean;
 };
 
 class AwsSdkClient implements IObjectStoreClient {
@@ -95,7 +96,7 @@ class AwsSdkClient implements IObjectStoreClient {
   constructor(private readonly config: AwsSdkConfig) {
     this.s3Client = new S3Client({
       endpoint: config.baseUrl,
-      forcePathStyle: true,
+      forcePathStyle: config.forcePathStyle,
       ...(config.region ? { region: config.region } : {}),
     });
   }
@@ -164,6 +165,12 @@ export type ObjectStoreClientConfig = {
   secretAccessKey?: string;
   region?: string;
   service?: string;
+  /**
+   * IAM mode only: address objects as `<baseUrl>/<bucket>/<key>` (true, the default) or
+   * `<bucket>.<baseUrl host>/<key>` (false). AWS FIPS endpoints such as
+   * `s3-fips.us-gov-west-1.amazonaws.com` only accept the virtual-hosted form.
+   */
+  forcePathStyle?: boolean;
 };
 
 export class ObjectStoreClient implements IObjectStoreClient {
@@ -199,6 +206,7 @@ export class ObjectStoreClient implements IObjectStoreClient {
         bucket: config.bucket,
         baseUrl: config.baseUrl,
         region: config.region,
+        forcePathStyle: config.forcePathStyle ?? true,
       }),
       config.bucket
     );

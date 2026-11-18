@@ -14,7 +14,11 @@ import { PlacementTagProcessor } from "@trigger.dev/core/v3/serverOnly";
 import { env } from "../env.js";
 import { type K8sApi, createK8sApi, type k8s } from "../clients/kubernetes.js";
 import { getRunnerId } from "../util.js";
-import { withBlockIoUringSeccompProfile } from "./kubernetesPodSpec.js";
+import {
+  withBlockIoUringSeccompProfile,
+  withWorkerVolumeMounts,
+  withWorkerVolumes,
+} from "./kubernetesPodSpec.js";
 
 type ResourceQuantities = {
   [K in "cpu" | "memory" | "ephemeral-storage"]?: string;
@@ -106,7 +110,10 @@ export class KubernetesWorkloadManager implements WorkloadManager {
     const runnerId = getRunnerId(opts.runFriendlyId, opts.nextAttemptNumber);
 
     try {
-      const basePodSpec = this.addPlacementTags(this.#defaultPodSpec, opts.placementTags);
+      const basePodSpec = withWorkerVolumes(
+        this.addPlacementTags(this.#defaultPodSpec, opts.placementTags),
+        env.KUBERNETES_WORKER_VOLUMES
+      );
       const podSpec = this.opts.checkpointsEnabled
         ? withBlockIoUringSeccompProfile(basePodSpec, opts.runtime)
         : basePodSpec;
@@ -123,13 +130,20 @@ export class KubernetesWorkloadManager implements WorkloadManager {
               "app.kubernetes.io/part-of": "trigger-worker",
               "app.kubernetes.io/component": "create",
             },
+            ...(Object.keys(env.KUBERNETES_WORKER_POD_ANNOTATIONS).length > 0
+              ? {
+                  annotations: {
+                    ...env.KUBERNETES_WORKER_POD_ANNOTATIONS,
+                  } as Record<string, string>,
+                }
+              : {}),
           },
           spec: {
             ...podSpec,
             affinity: this.#getAffinity(opts),
             tolerations: this.#getScheduleTolerations(this.#isScheduledRun(opts)),
             terminationGracePeriodSeconds: 60 * 60,
-            containers: [
+            containers: withWorkerVolumeMounts(env.KUBERNETES_WORKER_VOLUME_MOUNTS, [
               {
                 name: "run-controller",
                 image: this.stripImageDigest(opts.image),
@@ -139,6 +153,14 @@ export class KubernetesWorkloadManager implements WorkloadManager {
                   },
                 ],
                 resources: this.#getResourcesForMachine(opts.machine),
+                ...(Object.keys(env.KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT).length > 0
+                  ? { securityContext: env.KUBERNETES_WORKER_CONTAINER_SECURITY_CONTEXT }
+                  : {}),
+                ...(env.KUBERNETES_WORKER_ENV_FROM_SECRET
+                  ? {
+                      envFrom: [{ secretRef: { name: env.KUBERNETES_WORKER_ENV_FROM_SECRET } }],
+                    }
+                  : {}),
                 env: [
                   {
                     name: "TRIGGER_DEQUEUED_AT_MS",
@@ -269,7 +291,7 @@ export class KubernetesWorkloadManager implements WorkloadManager {
                     : []),
                 ],
               },
-            ],
+            ]),
           },
         },
       });
@@ -322,12 +344,20 @@ export class KubernetesWorkloadManager implements WorkloadManager {
   get #defaultPodSpec(): Omit<k8s.V1PodSpec, "containers"> {
     return {
       restartPolicy: "Never",
-      automountServiceAccountToken: false,
+      // Explicit control over service account token mounting (defaults to false for security)
+      automountServiceAccountToken: env.KUBERNETES_WORKER_AUTOMOUNT_SERVICE_ACCOUNT_TOKEN,
       imagePullSecrets: this.getImagePullSecrets(),
       ...(env.KUBERNETES_SCHEDULER_NAME
         ? {
             schedulerName: env.KUBERNETES_SCHEDULER_NAME,
           }
+        : {}),
+      // Optionally specify a service account for the worker pods
+      ...(env.KUBERNETES_WORKER_SERVICE_ACCOUNT
+        ? { serviceAccountName: env.KUBERNETES_WORKER_SERVICE_ACCOUNT }
+        : {}),
+      ...(Object.keys(env.KUBERNETES_WORKER_POD_SECURITY_CONTEXT).length > 0
+        ? { securityContext: env.KUBERNETES_WORKER_POD_SECURITY_CONTEXT }
         : {}),
       ...(env.KUBERNETES_WORKER_NODETYPE_LABEL
         ? {

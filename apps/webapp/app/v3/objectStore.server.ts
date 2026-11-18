@@ -5,6 +5,7 @@ import { type AuthenticatedEnvironment } from "~/services/apiAuth.server";
 import { logger } from "~/services/logger.server";
 import { ServiceValidationError } from "~/v3/services/common.server";
 import { singleton } from "~/utils/singleton";
+import { BoolEnv } from "~/utils/boolEnv";
 import {
   normalizeObjectStoreLogicalKeyPathname,
   ObjectStoreClient,
@@ -182,6 +183,9 @@ function getObjectStoreConfig(protocol?: string): ObjectStoreClientConfig | unde
       secretAccessKey: process.env[`${prefix}SECRET_ACCESS_KEY`] || undefined,
       region: process.env[`${prefix}REGION`] || undefined,
       service: process.env[`${prefix}SERVICE`] || undefined,
+      forcePathStyle: BoolEnv.optional().parse(
+        process.env[`${prefix}FORCE_PATH_STYLE`] || undefined
+      ),
     };
   }
 
@@ -197,6 +201,7 @@ function getObjectStoreConfig(protocol?: string): ObjectStoreClientConfig | unde
     secretAccessKey: env.OBJECT_STORE_SECRET_ACCESS_KEY || undefined,
     region: env.OBJECT_STORE_REGION || undefined,
     service: env.OBJECT_STORE_SERVICE || undefined,
+    forcePathStyle: env.OBJECT_STORE_FORCE_PATH_STYLE,
   };
 }
 

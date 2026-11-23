@@ -88,12 +88,14 @@ mode: "wide"
 | `OBJECT_STORE_SECRET_ACCESS_KEY`                 | No       | —                     | Object store secret key (default provider).                                                                        |
 | `OBJECT_STORE_REGION`                            | No       | —                     | Object store region (default provider).                                                                            |
 | `OBJECT_STORE_SERVICE`                           | No       | s3                    | Object store service (default provider).                                                                           |
+| `OBJECT_STORE_FORCE_PATH_STYLE`                  | No       | true                  | IAM mode only (no access keys). Set `false` for virtual-hosted addressing, which AWS FIPS endpoints require.       |
 | `OBJECT_STORE_DEFAULT_PROTOCOL`                  | No       | —                     | Protocol for new uploads (e.g. `s3`, `r2`). Enables protocol-prefixed storage. See migration guide below.          |
 | `OBJECT_STORE_{PROTOCOL}_BASE_URL`               | No       | —                     | Named provider base URL (replace `{PROTOCOL}`, e.g. `OBJECT_STORE_S3_BASE_URL`).                                   |
 | `OBJECT_STORE_{PROTOCOL}_ACCESS_KEY_ID`          | No       | —                     | Named provider access key.                                                                                         |
 | `OBJECT_STORE_{PROTOCOL}_SECRET_ACCESS_KEY`      | No       | —                     | Named provider secret key.                                                                                         |
 | `OBJECT_STORE_{PROTOCOL}_REGION`                 | No       | —                     | Named provider region.                                                                                             |
 | `OBJECT_STORE_{PROTOCOL}_SERVICE`                | No       | —                     | Named provider service.                                                                                            |
+| `OBJECT_STORE_{PROTOCOL}_FORCE_PATH_STYLE`       | No       | true                  | Named provider path-style addressing (IAM mode only).                                                              |
 | `ARTIFACTS_OBJECT_STORE_BUCKET`                  | No       | —                     | Optional separate bucket for artifacts. If not set, uses main object store.                                        |
 | `ARTIFACTS_OBJECT_STORE_BASE_URL`                | No       | —                     | Optional artifacts store base URL.                                                                                 |
 | `ARTIFACTS_OBJECT_STORE_ACCESS_KEY_ID`           | No       | —                     | Optional artifacts store access key.                                                                               |

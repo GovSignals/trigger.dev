@@ -76,6 +76,13 @@ webapp:
 
   replicaCount: 1
 
+  # Deployment update strategy. Empty keeps the Kubernetes default (RollingUpdate).
+  # Set `type: Recreate` when the webapp mounts a ReadWriteOnce volume (e.g.
+  # `persistence.shared` with the default access mode): a rolling update starts
+  # the new pod before the old one stops, and the new pod cannot attach the
+  # volume while the old pod still holds it.
+  strategy: {}
+
   service:
     type: ClusterIP
     port: 3030

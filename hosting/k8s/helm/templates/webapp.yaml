@@ -49,6 +49,10 @@ metadata:
     {{- include "trigger-v4.componentLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" $component) | nindent 4 }}
 spec:
   replicas: {{ .Values.webapp.replicaCount }}
+  {{- with .Values.webapp.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "trigger-v4.componentSelectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" $component) | nindent 6 }}
